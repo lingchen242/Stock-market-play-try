@@ -1,0 +1,15 @@
+{
+  "name": "stock-sim",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "《股市模拟》—— 45 个交易日的 A 股投资模拟小游戏（单文件 HTML 交付，node_modules 管理图表库）",
+  "scripts": {
+    "test": "node --test tests/",
+    "serve": "node server.mjs",
+    "start": "node server.mjs"
+  },
+  "dependencies": {
+    "lightweight-charts": "4.2.3"
+  }
+}
