@@ -11,5 +11,8 @@
   },
   "dependencies": {
     "lightweight-charts": "4.2.3"
+  },
+  "devDependencies": {
+    "jsdom": "^29.1.1"
   }
 }

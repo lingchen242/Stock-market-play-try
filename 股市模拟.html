@@ -299,6 +299,12 @@ table.grid tbody tr.is-active td:first-child { box-shadow: inset 2px 0 0 var(--a
       <span class="hint" id="position-summary"></span>
     </div>
     <div class="panel-body tight"><div id="positions"></div></div>
+
+    <div class="panel-head">
+      <span class="panel-title">行情</span>
+      <span class="hint" id="list-hint"></span>
+    </div>
+    <div class="panel-body tight"><div class="market-table" id="market-list"></div></div>
   </section>
 
   <section class="panel panel-market" data-tab="market">
@@ -1305,7 +1311,762 @@ window.GameCore = (function () {
 })();
 </script>
 
-<!--__UI__-->
+<!-- ==========================================================================
+     界面层：图表、渲染与交互。所有量化逻辑都来自 GameCore，这里只负责呈现。
+     ========================================================================== -->
+<script id="game-ui">
+(function () {
+  'use strict';
+
+  const Core = window.GameCore;
+  const CONFIG = Core.CONFIG;
+  const SAVE_KEY = 'stock-sim:save:v1';
+  const LAST_SEED_KEY = 'stock-sim:last-seed';
+
+  /* ------------------------------------------------------------------ 小工具 */
+  const el = (id) => document.getElementById(id);
+  const fmt = (v, d = 2) => Number(v).toFixed(d);
+  const money = (v) => Number(v).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const signed = (v, d = 2) => `${v >= 0 ? '+' : ''}${Number(v).toFixed(d)}`;
+  const pct = (v) => `${v >= 0 ? '+' : ''}${(v * 100).toFixed(2)}%`;
+  const tone = (v) => (v > 0 ? 'up' : v < 0 ? 'down' : 'flat');
+  const arrow = (v) => (v > 0 ? '↑' : v < 0 ? '↓' : '—');
+  const escapeHtml = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+  /* -------------------------------------------------------------------- 状态 */
+  const App = {
+    seed: 0,
+    world: null,
+    market: null,
+    portfolio: null,
+    broker: null,
+    selected: 0,
+    orderType: 'market',
+    chartLib: false,
+    klineChart: null, klineSeries: null,
+    equityChart: null, equitySeries: null, indexSeries: null,
+  };
+
+  const decisionDay = () => App.broker.state.day;
+  const stock = (i) => App.market.stocks[i];
+  /** 玩家在决策阶段只能看到 ≤ T-1 的行情，杜绝未来函数。 */
+  const visibleBars = (i) => stock(i).days.slice(0, decisionDay());
+  const lastBar = (i) => {
+    const bars = visibleBars(i);
+    return bars.length ? bars[bars.length - 1] : null;
+  };
+  const refPrice = (i) => {
+    const bar = lastBar(i);
+    return bar ? bar.close : stock(i).price0;
+  };
+
+  /* ------------------------------------------------------------------ 提示条 */
+  function toast(text, kind = '') {
+    const node = document.createElement('div');
+    node.className = `notice ${kind}`;
+    node.textContent = text;
+    el('notices').appendChild(node);
+    setTimeout(() => node.remove(), 4200);
+  }
+
+  /* ------------------------------------------------------------------ 弹层 */
+  function modal({ title, sub, bodyHtml, actions }) {
+    const root = el('modal-root');
+    root.innerHTML = `
+      <div class="modal-backdrop">
+        <div class="modal" role="dialog" aria-modal="true" aria-label="${escapeHtml(title)}">
+          <div class="modal-head">
+            <div class="modal-title">${escapeHtml(title)}</div>
+            ${sub ? `<div class="modal-sub">${escapeHtml(sub)}</div>` : ''}
+          </div>
+          <div class="modal-body">${bodyHtml}</div>
+          <div class="modal-foot"></div>
+        </div>
+      </div>`;
+    const foot = root.querySelector('.modal-foot');
+    for (const a of actions) {
+      const btn = document.createElement('button');
+      btn.className = `btn ${a.primary ? 'btn-primary' : ''}`;
+      btn.textContent = a.label;
+      btn.addEventListener('click', () => { closeModal(); a.onClick?.(); });
+      foot.appendChild(btn);
+    }
+  }
+  function closeModal() { el('modal-root').innerHTML = ''; }
+
+  /* ---------------------------------------------------------- 图表库三级加载 */
+  const CHART_SOURCES = [
+    'node_modules/lightweight-charts/dist/lightweight-charts.standalone.production.js',
+    'https://cdn.jsdelivr.net/npm/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js',
+    'https://unpkg.com/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js',
+  ];
+
+  function loadScript(src) {
+    return new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = src;
+      s.onload = () => resolve(true);
+      s.onerror = () => reject(new Error(`加载失败：${src}`));
+      document.head.appendChild(s);
+    });
+  }
+
+  /** 依次尝试本地 node_modules → 公网 CDN；全部失败则退回内置 Canvas 绘制。 */
+  async function ensureChartLib() {
+    for (const src of CHART_SOURCES) {
+      try {
+        await loadScript(src);
+        if (window.LightweightCharts) return true;
+      } catch { /* 换下一个源 */ }
+    }
+    return false;
+  }
+
+  /* -------------------------------------------------------- 内置 Canvas 兜底 */
+  function prepCanvas(canvas) {
+    const dpr = window.devicePixelRatio || 1;
+    const w = canvas.clientWidth || canvas.parentElement.clientWidth || 320;
+    const h = canvas.clientHeight || 300;
+    canvas.width = Math.round(w * dpr);
+    canvas.height = Math.round(h * dpr);
+    const ctx = canvas.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+    return { ctx, w, h };
+  }
+
+  /** 离线兜底用的极简 K 线绘制：不依赖任何外部库。 */
+  function drawCandles(canvas, bars) {
+    const { ctx, w, h } = prepCanvas(canvas);
+    ctx.fillStyle = '#0a0d12';
+    ctx.fillRect(0, 0, w, h);
+    if (!bars.length) {
+      ctx.fillStyle = '#6b7686';
+      ctx.font = '12px sans-serif';
+      ctx.fillText('暂无历史行情', 12, 22);
+      return;
+    }
+    const pad = { l: 10, r: 56, t: 12, b: 18 };
+    const plotW = Math.max(10, w - pad.l - pad.r);
+    const plotH = Math.max(10, h - pad.t - pad.b);
+    const hi = Math.max(...bars.map((b) => b.high));
+    const lo = Math.min(...bars.map((b) => b.low));
+    const span = hi - lo || 1;
+    const y = (v) => pad.t + ((hi - v) / span) * plotH;
+    const cw = plotW / bars.length;
+
+    ctx.strokeStyle = '#1c222b';
+    ctx.lineWidth = 1;
+    for (let g = 0; g <= 4; g++) {
+      const gy = pad.t + (plotH / 4) * g;
+      ctx.beginPath(); ctx.moveTo(pad.l, gy); ctx.lineTo(pad.l + plotW, gy); ctx.stroke();
+    }
+
+    bars.forEach((b, i) => {
+      const x = pad.l + i * cw + cw / 2;
+      const rising = b.close >= b.open;
+      const color = rising ? '#e5484d' : '#30a46c';
+      ctx.strokeStyle = color;
+      ctx.fillStyle = color;
+      ctx.beginPath(); ctx.moveTo(x, y(b.high)); ctx.lineTo(x, y(b.low)); ctx.stroke();
+      const bw = Math.max(1, cw * 0.62);
+      const yo = y(b.open);
+      const yc = y(b.close);
+      ctx.fillRect(x - bw / 2, Math.min(yo, yc), bw, Math.max(1, Math.abs(yc - yo)));
+    });
+
+    const last = bars[bars.length - 1];
+    ctx.fillStyle = last.close >= last.open ? '#e5484d' : '#30a46c';
+    ctx.font = '11px ui-monospace, monospace';
+    ctx.fillText(fmt(last.close), pad.l + plotW + 6, y(last.close) + 4);
+    ctx.fillStyle = '#6b7686';
+    ctx.fillText('离线简易图', pad.l, h - 5);
+  }
+
+  /** 兜底用的权益曲线（账户 vs 指数，均归一化到 100）。 */
+  function drawEquity(canvas, curve, index) {
+    const { ctx, w, h } = prepCanvas(canvas);
+    ctx.fillStyle = '#0a0d12';
+    ctx.fillRect(0, 0, w, h);
+    if (curve.length < 2) {
+      ctx.fillStyle = '#6b7686';
+      ctx.font = '12px sans-serif';
+      ctx.fillText('暂无权益记录', 12, 22);
+      return;
+    }
+    const pad = { l: 10, r: 56, t: 10, b: 16 };
+    const plotW = w - pad.l - pad.r;
+    const plotH = h - pad.t - pad.b;
+    const base = curve[0].equity;
+    const idxBase = index[0].close;
+    const acct = curve.map((p) => (p.equity / base) * 100);
+    const idx = index.map((p) => (p.close / idxBase) * 100);
+    const all = acct.concat(idx);
+    const hi = Math.max(...all);
+    const lo = Math.min(...all);
+    const span = hi - lo || 1;
+    const x = (i, n) => pad.l + (plotW * i) / Math.max(1, n - 1);
+    const y = (v) => pad.t + ((hi - v) / span) * plotH;
+
+    const line = (vals, color, width) => {
+      ctx.strokeStyle = color; ctx.lineWidth = width; ctx.beginPath();
+      vals.forEach((v, i) => (i ? ctx.lineTo(x(i, vals.length), y(v)) : ctx.moveTo(x(i, vals.length), y(v))));
+      ctx.stroke();
+    };
+    line(idx, '#3a424f', 1);
+    line(acct, '#d9a441', 2);
+    ctx.fillStyle = '#6b7686';
+    ctx.font = '11px ui-monospace, monospace';
+    ctx.fillText(`${fmt(acct[acct.length - 1], 1)} / ${fmt(idx[idx.length - 1], 1)}`, pad.l + plotW + 4, pad.t + 10);
+  }
+
+  /* ---------------------------------------------------- 图表：初始化与更新 */
+  function initCharts() {
+    if (!App.chartLib) {
+      el('kline').style.display = 'none';
+      el('kline-fallback').style.display = 'block';
+      el('equity').style.display = 'none';
+      el('equity-fallback').style.display = 'block';
+      return;
+    }
+    const LWC = window.LightweightCharts;
+    const baseOptions = {
+      layout: { background: { color: 'transparent' }, textColor: '#98a2b3', fontSize: 11 },
+      grid: { vertLines: { color: '#1c222b' }, horzLines: { color: '#1c222b' } },
+      rightPriceScale: { borderColor: '#262d38' },
+      timeScale: { borderColor: '#262d38', timeVisible: false },
+      crosshair: { mode: 0 },
+      handleScale: { axisPressedMouseMove: false },
+    };
+    App.klineChart = LWC.createChart(el('kline'), { ...baseOptions, height: 300 });
+    App.klineSeries = App.klineChart.addCandlestickSeries({
+      upColor: '#e5484d', downColor: '#30a46c',
+      borderUpColor: '#e5484d', borderDownColor: '#30a46c',
+      wickUpColor: '#e5484d', wickDownColor: '#30a46c',
+    });
+
+    App.equityChart = LWC.createChart(el('equity'), { ...baseOptions, height: 150 });
+    App.indexSeries = App.equityChart.addLineSeries({ color: '#3a424f', lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
+    App.equitySeries = App.equityChart.addLineSeries({ color: '#d9a441', lineWidth: 2, priceLineVisible: false });
+
+    const resize = () => {
+      App.klineChart.applyOptions({ width: el('kline').clientWidth });
+      App.equityChart.applyOptions({ width: el('equity').clientWidth });
+    };
+    window.addEventListener('resize', resize);
+    resize();
+  }
+
+  function updateCharts() {
+    const sel = App.selected;
+    const bars = visibleBars(sel);
+
+    if (App.chartLib) {
+      App.klineSeries.setData(bars.map((b) => ({
+        time: b.date, open: b.open, high: b.high, low: b.low, close: b.close,
+      })));
+      const curve = App.portfolio.equityCurve;
+      if (curve.length >= 1) {
+        const base = curve[0].equity;
+        App.equitySeries.setData(curve.map((p) => ({
+          time: App.market.calendar[p.day].iso, value: (p.equity / base) * 100,
+        })));
+        const indexBase = App.market.index[curve[0].day].close;
+        App.indexSeries.setData(curve.map((p) => ({
+          time: App.market.calendar[p.day].iso, value: (App.market.index[p.day].close / indexBase) * 100,
+        })));
+      } else {
+        App.equitySeries.setData([]);
+        App.indexSeries.setData([]);
+      }
+      App.klineChart.timeScale().fitContent();
+      App.equityChart.timeScale().fitContent();
+    } else {
+      drawCandles(el('kline-fallback'), bars);
+      drawEquity(el('equity-fallback'), App.portfolio.equityCurve, App.market.index);
+    }
+  }
+
+  /* ------------------------------------------------------------------ 渲染 */
+  function renderTicker() {
+    const day = decisionDay();
+    const idx = App.market.index;
+    const idxNow = day > 0 ? idx[day - 1].close : idx[0].close;
+    const idxPrev = day > 1 ? idx[day - 2].close : idx[0].open;
+    const idxChg = idxNow / idxPrev - 1;
+
+    const equity = day > 0
+      ? App.portfolio.equityCurve[App.portfolio.equityCurve.length - 1].equity
+      : CONFIG.rules.initialCash;
+    const prevEquity = day > 1 ? App.portfolio.equityCurve[App.portfolio.equityCurve.length - 2].equity : CONFIG.rules.initialCash;
+    const dayPnl = equity - prevEquity;
+
+    const dateLabel = day < CONFIG.time.tradingDays ? App.market.calendar[day].label : '已收盘';
+    el('ticker').innerHTML = `
+      <div class="tick"><span class="tick-label">交易日</span><span class="tick-value">${Math.min(day + 1, CONFIG.time.tradingDays)}/${CONFIG.time.tradingDays}</span></div>
+      <div class="tick"><span class="tick-label">${escapeHtml(dateLabel)}</span><span class="tick-value" style="font-size:var(--fs-sm);color:var(--text-faint)">${CONFIG.index.name}</span></div>
+      <div class="tick"><span class="tick-label">指数</span><span class="tick-value ${tone(idxChg)}">${fmt(idxNow, 1)} ${arrow(idxChg)}${pct(idxChg)}</span></div>
+      <div class="tick"><span class="tick-label">总资产</span><span class="tick-value">${money(equity)}</span></div>
+      <div class="tick"><span class="tick-label">今日盈亏</span><span class="tick-value ${tone(dayPnl)}">${signed(dayPnl)}</span></div>`;
+    el('day-label').textContent = `第 ${Math.min(day + 1, CONFIG.time.tradingDays)} / ${CONFIG.time.tradingDays} 个交易日`;
+  }
+
+  function renderAccount() {
+    const day = decisionDay();
+    const equity = day > 0 ? App.portfolio.equityCurve[App.portfolio.equityCurve.length - 1].equity : CONFIG.rules.initialCash;
+    let marketValue = 0;
+    let costValue = 0;
+    for (const pos of Object.values(App.portfolio.positions)) {
+      if (pos.qty <= 0) continue;
+      const bar = lastBar(pos.stockIdx);
+      const price = bar ? bar.close : stock(pos.stockIdx).price0;
+      marketValue += pos.qty * price;
+      costValue += pos.qty * pos.avgCost;
+    }
+    const floatPnl = marketValue - costValue;
+    const totalPnl = equity - CONFIG.rules.initialCash;
+
+    el('account-grid').innerHTML = `
+      <div class="acct-cell"><span class="acct-label">总资产</span><span class="acct-value big ${tone(totalPnl)}">${money(equity)}</span></div>
+      <div class="acct-cell"><span class="acct-label">累计收益</span><span class="acct-value ${tone(totalPnl)}">${signed(totalPnl)} (${pct(totalPnl / CONFIG.rules.initialCash)})</span></div>
+      <div class="acct-cell"><span class="acct-label">可用现金</span><span class="acct-value">${money(App.portfolio.cash)}</span></div>
+      <div class="acct-cell"><span class="acct-label">持仓市值</span><span class="acct-value">${money(marketValue)}</span></div>
+      <div class="acct-cell"><span class="acct-label">持仓浮盈</span><span class="acct-value ${tone(floatPnl)}">${signed(floatPnl)}</span></div>
+      <div class="acct-cell"><span class="acct-label">累计费用</span><span class="acct-value" style="color:var(--text-dim)">${money(App.portfolio.feeTotal)}</span></div>`;
+
+    const held = Object.values(App.portfolio.positions).filter((p) => p.qty > 0);
+    el('position-summary').textContent = held.length ? `${held.length} 只` : '空仓';
+  }
+
+  function renderPositions() {
+    const held = Object.values(App.portfolio.positions).filter((p) => p.qty > 0);
+    if (!held.length) {
+      el('positions').innerHTML = '<div class="empty">还没有持仓。在右侧「行情」里选一只股票开始吧。</div>';
+      return;
+    }
+    const rows = held.map((pos) => {
+      const s = stock(pos.stockIdx);
+      const price = lastBar(pos.stockIdx)?.close ?? s.price0;
+      const pnl = (price - pos.avgCost) * pos.qty;
+      const pnlPct = pos.avgCost > 0 ? price / pos.avgCost - 1 : 0;
+      return `<tr data-stock="${pos.stockIdx}" class="${pos.stockIdx === App.selected ? 'is-active' : ''}">
+        <td><span class="stock-name">${escapeHtml(s.name)}${s.st ? '<span class="board-tag st">ST</span>' : ''}</span><span class="stock-code">${s.code}</span></td>
+        <td class="num">${pos.qty}</td>
+        <td class="num" style="color:var(--text-dim)">${pos.available}</td>
+        <td class="num">${fmt(pos.avgCost)}</td>
+        <td class="num ${tone(price - pos.avgCost)}">${fmt(price)}</td>
+        <td class="num ${tone(pnl)}">${signed(pnl)}</td>
+        <td class="num ${tone(pnlPct)}">${pct(pnlPct)}</td>
+      </tr>`;
+    }).join('');
+    el('positions').innerHTML = `<table class="grid">
+      <thead><tr><th>名称</th><th>持仓</th><th>可卖</th><th>成本</th><th>现价</th><th>盈亏</th><th>比例</th></tr></thead>
+      <tbody>${rows}</tbody></table>`;
+  }
+
+  function renderMarketList() {
+    const day = decisionDay();
+    const rows = App.market.stocks.map((s) => {
+      const bar = lastBar(s.index);
+      const price = bar ? bar.close : s.price0;
+      const prev = bar ? bar.prevClose : s.price0;
+      const chg = price / prev - 1;
+      const boardTag = s.board === 'star' ? '<span class="board-tag star">科创</span>'
+        : s.board === 'growth' ? '<span class="board-tag growth">创业</span>' : '';
+      const stTag = s.st ? '<span class="board-tag st">ST</span>' : '';
+      return `<tr data-stock="${s.index}" class="${s.index === App.selected ? 'is-active' : ''}">
+        <td><span class="stock-name">${escapeHtml(s.name)}${stTag}${boardTag}</span><span class="stock-code">${s.code} · ${escapeHtml(s.industry)}</span></td>
+        <td><span class="chg-pill ${tone(chg)}">${fmt(price)} ${arrow(chg)}${pct(chg)}</span></td>
+      </tr>`;
+    }).join('');
+    el('market-list').innerHTML = `<table class="grid"><tbody>${rows}</tbody></table>`;
+    el('list-hint').textContent = day === 0 ? '开盘前' : `截至 ${App.market.calendar[day - 1].label}`;
+  }
+
+  function renderChartHead() {
+    const s = stock(App.selected);
+    const bar = lastBar(App.selected);
+    const price = bar ? bar.close : s.price0;
+    const prev = bar ? bar.prevClose : s.price0;
+    const chg = price / prev - 1;
+    el('chart-title').textContent = `${s.name} ${s.code}`;
+    el('chart-price').className = `chart-price ${tone(chg)}`;
+    el('chart-price').textContent = `${fmt(price)} ${arrow(chg)}${pct(chg)}`;
+    const limit = s.st ? CONFIG.boards.st : s.limit;
+    el('chart-meta').textContent = [
+      s.industry,
+      `涨跌停 ±${(limit * 100).toFixed(0)}%`,
+      s.st ? 'ST' : null,
+      bar ? `量 ${(bar.amount / 1e8).toFixed(2)} 亿` : '尚无成交',
+    ].filter(Boolean).join(' · ');
+
+    const notice = el('chart-notice');
+    if (decisionDay() === 0) {
+      notice.innerHTML = '<div class="fallback-note">开盘前：今天收盘后才会产生第一根 K 线。你可以先读消息面，再决定买入。</div>';
+    } else {
+      notice.innerHTML = '';
+    }
+  }
+
+  function renderTrade() {
+    const s = stock(App.selected);
+    const price = refPrice(App.selected);
+    const pos = Core.positionOf(App.portfolio, App.selected);
+    el('trade-hint').textContent = `参考价 ${fmt(price)}（${lastBar(App.selected) ? '昨收' : '发行价'}）`;
+
+    const qty = Number(el('trade-qty').value) || 0;
+    if (App.orderType === 'market') {
+      const est = qty * price;
+      const fee = Core.utils.buyFees(est, CONFIG);
+      el('qty-estimate').textContent = qty > 0
+        ? `预计金额 ≈ ${money(est)} 元（含费用约 ${fmt(fee)} 元）；可卖 ${pos.available} 股`
+        : `可卖 ${pos.available} 股`;
+    } else {
+      const lp = Number(el('trade-limit').value) || 0;
+      el('qty-estimate').textContent = lp > 0
+        ? `限价 ${fmt(lp)}，触及才成交；可卖 ${pos.available} 股`
+        : `可卖 ${pos.available} 股`;
+    }
+  }
+
+  function renderOrders() {
+    const orders = App.broker.state.orders;
+    el('order-hint').textContent = orders.length ? `${orders.length} 笔待成交` : '无';
+    if (!orders.length) {
+      el('orders').innerHTML = '<div class="empty">当前没有挂单。市价单会在点击「收盘结算」时按当日收盘价成交。</div>';
+      return;
+    }
+    const rows = orders.map((o) => {
+      const s = stock(o.stockIdx);
+      const side = o.side === 'buy' ? '<span class="up">买入</span>' : '<span class="down">卖出</span>';
+      const type = o.type === 'market' ? '市价' : `限价 ${fmt(o.limitPrice)}`;
+      return `<tr>
+        <td><span class="stock-name">${escapeHtml(s.name)}</span><span class="stock-code">${s.code}</span></td>
+        <td>${side}</td><td>${type}</td><td class="num">${o.qty}</td>
+        <td class="num" style="color:var(--text-dim)">${o.type === 'limit' ? `${o.remainingDays} 日` : '—'}</td>
+        <td><button class="btn btn-sm" data-cancel="${o.id}">撤单</button></td>
+      </tr>`;
+    }).join('');
+    el('orders').innerHTML = `<table class="grid">
+      <thead><tr><th>标的</th><th>方向</th><th>类型</th><th>数量</th><th>剩余</th><th></th></tr></thead>
+      <tbody>${rows}</tbody></table>`;
+  }
+
+  function renderNews() {
+    const day = decisionDay();
+    const items = App.market.news[day] ?? [];
+    el('news-count').textContent = items.length ? `${items.length} 条` : '暂无';
+    if (!items.length) {
+      el('news').innerHTML = '<div class="empty">今天盘前没有新消息。</div>';
+      return;
+    }
+    el('news').innerHTML = items.map((n) => {
+      const tagKind = n.rumor ? 'rumor' : n.tone === 'bad' ? 'bad' : n.tone === 'good' ? 'good' : '';
+      const tagText = n.rumor ? '传闻' : n.scope === 'market' ? '宏观' : n.scope === 'industry' ? '行业' : n.scope === 'stock' ? '公司' : '快讯';
+      let text = escapeHtml(n.headline);
+      if (n.stockIdx !== null && n.stockIdx !== undefined) {
+        const name = escapeHtml(stock(n.stockIdx).name);
+        text = text.replace(name, `<span class="sym">${name}</span>`);
+      }
+      return `<div class="news-item">
+        <div class="news-tags"><span class="news-tag ${tagKind}">${tagText}</span></div>
+        <div class="news-text">${text}</div>
+      </div>`;
+    }).join('');
+  }
+
+  function renderEmotion() {
+    const day = decisionDay();
+    const value = day === 0 ? App.market.emotion[0] : App.market.emotion[day - 1];
+    const label = value >= 80 ? '狂热' : value >= 62 ? '活跃' : value >= 38 ? '平静' : value >= 20 ? '低迷' : '冰点';
+    el('emotion-value').textContent = fmt(value, 1);
+    el('emotion-label').textContent = label;
+    el('emotion-fill').style.width = `${value}%`;
+    const note = value >= 80 ? '情绪过热，追高的风险在放大。'
+      : value <= 20 ? '情绪冰点，恐慌里往往藏着机会。'
+      : '情绪处于常态区间，跟着消息和基本面走。';
+    el('emotion-note').textContent = note;
+  }
+
+  function renderAll() {
+    renderTicker();
+    renderAccount();
+    renderPositions();
+    renderMarketList();
+    renderChartHead();
+    renderTrade();
+    renderOrders();
+    renderNews();
+    renderEmotion();
+    updateCharts();
+    el('btn-next').disabled = App.broker.state.finished;
+    el('btn-next').textContent = App.broker.state.finished ? '本局已结束' : '收盘结算 →';
+  }
+
+  /* ------------------------------------------------------------------ 存档 */
+  function persist() {
+    if (!App.broker) return;
+    try {
+      localStorage.setItem(SAVE_KEY, JSON.stringify(Core.serialize(App.seed, App.broker, App.portfolio)));
+    } catch { /* 隐私模式下 localStorage 可能不可用 */ }
+  }
+
+  function restore() {
+    let save;
+    try {
+      const raw = localStorage.getItem(SAVE_KEY);
+      if (!raw) return false;
+      save = JSON.parse(raw);
+    } catch { return false; }
+
+    const data = Core.deserialize(save);
+    if (!data) { toast('存档版本不兼容，已忽略并重新开局', 'bad'); return false; }
+
+    App.seed = data.seed;
+    App.world = Core.generateWorld(App.seed);
+    App.market = Core.simulate(App.world);
+    App.portfolio = Core.createPortfolio(data.cash);
+    App.portfolio.feeTotal = data.feeTotal ?? 0;
+    App.portfolio.positions = data.positions ?? {};
+    App.portfolio.trades = data.trades ?? [];
+    App.portfolio.closedTrades = data.closedTrades ?? [];
+    App.portfolio.equityCurve = data.equityCurve ?? [];
+    App.broker = Core.createBroker(App.portfolio, App.market, CONFIG);
+    App.broker.state.day = data.day ?? 0;
+    App.broker.state.orders = data.orders ?? [];
+    App.broker.state.orderSeq = data.orderSeq ?? 1;
+    App.broker.state.finished = !!data.finished;
+    return true;
+  }
+
+  /* ------------------------------------------------------------------ 开局 */
+  function newGame(seed) {
+    App.seed = seed >>> 0;
+    App.world = Core.generateWorld(App.seed);
+    App.market = Core.simulate(App.world);
+    App.portfolio = Core.createPortfolio(CONFIG.rules.initialCash);
+    App.broker = Core.createBroker(App.portfolio, App.market, CONFIG);
+    App.selected = 0;
+    try { localStorage.setItem(LAST_SEED_KEY, String(App.seed)); } catch { /* 忽略 */ }
+    persist();
+    renderAll();
+  }
+
+  function showIntro() {
+    const lastSeed = (() => { try { return localStorage.getItem(LAST_SEED_KEY); } catch { return null; } })();
+    modal({
+      title: '股市模拟',
+      sub: '45 个交易日 · 初始资金 10 万元',
+      bodyHtml: `
+        <p style="margin-top:0">你是一名普通股民。市场里有 30 只虚构股票和一条完整的大盘，你能依靠的只有公开消息和自己的判断。</p>
+        <div class="score-row"><span class="score-key">交易规则</span><span class="score-val">T+1，当日买入次日才可卖</span></div>
+        <div class="score-row"><span class="score-key">成交方式</span><span class="score-val">市价按当日收盘价；限价按当日最低/最高触发</span></div>
+        <div class="score-row"><span class="score-key">涨跌停</span><span class="score-val">主板 ±10%，创业板/科创板 ±20%</span></div>
+        <div class="score-row"><span class="score-key">交易成本</span><span class="score-val">佣金万 2.5（最低 5 元）+ 印花税 + 滑点</span></div>
+        <div class="score-row"><span class="score-key">结算</span><span class="score-val">按相对华夏综指的超额收益评级</span></div>
+        <p class="hint" style="margin-bottom:0">涨停买不进、跌停卖不出。所有股票名称与代码均为虚构。</p>
+        <div class="field" style="margin-top:16px">
+          <label for="seed-input">随机种子（相同种子产生完全相同的行情，便于复盘）</label>
+          <input id="seed-input" type="number" value="${lastSeed ?? Math.floor(Math.random() * 1e8)}" inputmode="numeric">
+        </div>`,
+      actions: [
+        { label: '读取上次存档', onClick: () => { if (!restore()) { toast('没有可用的存档', 'bad'); showIntro(); } else renderAll(); } },
+        {
+          label: '开始新的 45 天', primary: true, onClick: () => {
+            const v = Number(document.getElementById('seed-input')?.value);
+            newGame(Number.isFinite(v) && v > 0 ? v : Math.floor(Math.random() * 1e8));
+            toast('开局成功，先读消息面再动手', 'good');
+          },
+        },
+      ],
+    });
+  }
+
+  function showSettlement() {
+    const score = Core.computeScore(App.portfolio, App.market, CONFIG);
+    const row = (k, v, cls = '') => `<div class="score-row"><span class="score-key">${k}</span><span class="score-val ${cls}">${v}</span></div>`;
+    modal({
+      title: `结算 · ${score.title}`,
+      sub: `45 个交易日结束 · 随机种子 ${App.seed}`,
+      bodyHtml: `
+        ${row('期末总资产', money(score.finalEquity))}
+        ${row('总收益率', pct(score.totalReturn), tone(score.totalReturn))}
+        ${row(`${CONFIG.index.name}同期`, pct(score.indexReturn), tone(score.indexReturn))}
+        ${row('相对基准超额', pct(score.excess), tone(score.excess))}
+        ${row('最大回撤', pct(score.maxDrawdown), 'down')}
+        ${row('交易次数', `${score.tradeCount} 次`)}
+        ${row('胜率', score.winRate === null ? '无平仓交易' : pct(score.winRate))}
+        ${row('累计交易成本', `${money(score.feeTotal)} 元`, 'down')}
+        <p class="hint" style="margin-bottom:0">交易成本是散户最大的隐形对手：它不产生任何收益，却每天都在扣钱。</p>`,
+      actions: [
+        { label: '用同一种子再来一次', onClick: () => newGame(App.seed) },
+        { label: '换个种子重开', primary: true, onClick: () => newGame(Math.floor(Math.random() * 1e8)) },
+      ],
+    });
+  }
+
+  /* ------------------------------------------------------------------ 交互 */
+  function placeOrder(side) {
+    if (App.broker.state.finished) { toast('本局已结束', 'bad'); return; }
+    const qty = Number(el('trade-qty').value) || 0;
+    const req = { stockIdx: App.selected, side, type: App.orderType, qty };
+    if (App.orderType === 'limit') {
+      req.limitPrice = Number(el('trade-limit').value);
+      req.validity = Number(el('trade-validity').value);
+    }
+    const res = App.broker.placeOrder(req);
+    if (!res.ok) { toast(res.reason, 'bad'); return; }
+    const s = stock(App.selected);
+    toast(`已挂单：${side === 'buy' ? '买入' : '卖出'} ${s.name} ${res.order.qty} 股`, 'good');
+    persist();
+    renderAll();
+  }
+
+  function nextDay() {
+    if (App.broker.state.finished) return;
+    const day = decisionDay();
+    const res = App.broker.settleDay();
+    if (!res.ok) { toast(res.reason, 'bad'); return; }
+
+    for (const f of res.filled) {
+      const s = stock(f.order.stockIdx);
+      if (f.status === 'filled') {
+        toast(`${s.name} ${f.side === 'buy' ? '买入' : '卖出'}成交 ${f.qty} 股 @ ${fmt(f.price)}`, 'good');
+      } else if (f.status === 'rejected') {
+        toast(`${s.name} ${f.reason}`, 'bad');
+      } else if (f.status === 'expired') {
+        toast(`${s.name} ${f.reason}`);
+      }
+    }
+    for (const n of res.notices) toast(n.text, n.kind);
+
+    if (App.broker.state.finished) {
+      persist();
+      renderAll();
+      showSettlement();
+      return;
+    }
+    persist();
+    renderAll();
+  }
+
+  function bindEvents() {
+    // 选中股票（事件委托，覆盖持仓表与行情表）
+    document.addEventListener('click', (e) => {
+      const row = e.target.closest('tr[data-stock]');
+      if (row) {
+        App.selected = Number(row.dataset.stock);
+        renderAll();
+        return;
+      }
+      const cancel = e.target.closest('button[data-cancel]');
+      if (cancel) {
+        const res = App.broker.cancelOrder(Number(cancel.dataset.cancel));
+        toast(res.ok ? '已撤单' : res.reason, res.ok ? '' : 'bad');
+        persist();
+        renderAll();
+      }
+    });
+
+    el('btn-buy').addEventListener('click', () => placeOrder('buy'));
+    el('btn-sell').addEventListener('click', () => placeOrder('sell'));
+    el('btn-next').addEventListener('click', nextDay);
+
+    el('trade-qty').addEventListener('input', renderTrade);
+    el('trade-limit').addEventListener('input', renderTrade);
+
+    el('order-type').addEventListener('click', (e) => {
+      const btn = e.target.closest('button[data-type]');
+      if (!btn) return;
+      App.orderType = btn.dataset.type;
+      for (const b of el('order-type').children) b.classList.toggle('on', b === btn);
+      el('limit-field').style.display = App.orderType === 'limit' ? '' : 'none';
+      el('validity-field').style.display = App.orderType === 'limit' ? '' : 'none';
+      renderTrade();
+    });
+
+    el('qty-presets').addEventListener('click', (e) => {
+      const btn = e.target.closest('button[data-qty]');
+      if (!btn) return;
+      const price = refPrice(App.selected);
+      const lot = CONFIG.rules.lotSize;
+      let qty;
+      if (btn.dataset.qty === 'hf') qty = Math.floor((App.portfolio.cash / 2) / price / lot) * lot;
+      else if (btn.dataset.qty === 'all') qty = Math.floor(App.portfolio.cash / (price * 1.01) / lot) * lot;
+      else qty = Number(btn.dataset.qty);
+      el('trade-qty').value = Math.max(lot, qty || lot);
+      renderTrade();
+    });
+
+    el('btn-save').addEventListener('click', () => { persist(); toast('已存档到浏览器本地', 'good'); });
+    el('btn-load').addEventListener('click', () => {
+      if (restore()) { renderAll(); toast('已读取存档', 'good'); }
+      else toast('没有可用的存档', 'bad');
+    });
+    el('btn-restart').addEventListener('click', () => {
+      modal({
+        title: '重新开局',
+        sub: '当前进度将被清空',
+        bodyHtml: '<p style="margin:0">用同一种子可以复盘完全相同的行情；换个种子则是全新的市场。</p>',
+        actions: [
+          { label: '取消' },
+          { label: '同一种子重开', onClick: () => newGame(App.seed) },
+          { label: '换新种子', primary: true, onClick: () => newGame(Math.floor(Math.random() * 1e8)) },
+        ],
+      });
+    });
+
+    // 移动端标签切换
+    el('mobile-tabs').addEventListener('click', (e) => {
+      const btn = e.target.closest('button[data-tab]');
+      if (!btn) return;
+      for (const b of el('mobile-tabs').children) b.classList.toggle('on', b === btn);
+      for (const p of document.querySelectorAll('.panel')) {
+        p.classList.toggle('is-shown', p.dataset.tab === btn.dataset.tab);
+      }
+    });
+
+    // 离开页面前兜底存档
+    document.addEventListener('visibilitychange', () => { if (document.hidden) persist(); });
+    window.addEventListener('pagehide', persist);
+
+    // 键盘快捷键：B 买入 / S 卖出 / 空格结算
+    document.addEventListener('keydown', (e) => {
+      if (e.target.matches('input, select, textarea')) return;
+      if (e.key === 'b' || e.key === 'B') placeOrder('buy');
+      else if (e.key === 's' || e.key === 'S') placeOrder('sell');
+      else if (e.key === ' ') { e.preventDefault(); nextDay(); }
+    });
+  }
+
+  /* ------------------------------------------------------------------ 启动 */
+  async function boot() {
+    App.chartLib = await ensureChartLib();
+    initCharts();
+    bindEvents();
+
+    if (!restore()) {
+      // 没有存档：先铺一个初始局面作为背景，再弹开局说明
+      App.seed = 20260101;
+      App.world = Core.generateWorld(App.seed);
+      App.market = Core.simulate(App.world);
+      App.portfolio = Core.createPortfolio(CONFIG.rules.initialCash);
+      App.broker = Core.createBroker(App.portfolio, App.market, CONFIG);
+      renderAll();
+      showIntro();
+    } else {
+      renderAll();
+      toast('已恢复上次的存档', 'good');
+    }
+
+    if (!App.chartLib) {
+      toast('未能加载图表库（离线且无本地依赖），已切换为内置简易图', '');
+    }
+  }
+
+  boot();
+})();
+</script>
 
 </body>
 </html>
