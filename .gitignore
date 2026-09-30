@@ -1,0 +1,2 @@
+# 第三方安装的技能：机器本地资产，不入版本控制（类似 node_modules）
+.dsh/skills/
