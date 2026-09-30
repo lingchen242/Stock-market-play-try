@@ -1,0 +1,1311 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>股市模拟 · 45 个交易日</title>
+<style>
+/* ==========================================================================
+   设计令牌：色彩语义遵循中国股市习惯（红涨绿跌）
+   ========================================================================== */
+:root {
+  --bg:            #0e1116;
+  --bg-raised:     #161b23;
+  --bg-sunken:     #0a0d12;
+  --line:          #262d38;
+  --line-soft:     #1c222b;
+  --text:          #e6e9ee;
+  --text-dim:      #98a2b3;
+  --text-faint:    #6b7686;
+
+  --up:            #e5484d;   /* 涨：红 */
+  --up-soft:       rgba(229,72,77,.14);
+  --down:          #30a46c;   /* 跌：绿 */
+  --down-soft:     rgba(48,164,108,.14);
+  --flat:          #8b95a5;
+
+  --accent:        #d9a441;   /* 行情终端的琥珀色，用于强调与选中态 */
+  --accent-soft:   rgba(217,164,65,.14);
+  --info:          #4a90d9;
+  --danger:        #e5484d;
+
+  --space-1: 4px;  --space-2: 8px;  --space-3: 12px;
+  --space-4: 16px; --space-5: 24px; --space-6: 32px;
+
+  --fs-xs: 11px; --fs-sm: 12px; --fs-md: 13px;
+  --fs-lg: 15px; --fs-xl: 19px; --fs-2xl: 26px;
+
+  --radius-sm: 3px; --radius-md: 5px;
+  --font-ui: "PingFang SC", "Microsoft YaHei", "Hiragino Sans GB", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-num: ui-monospace, "SF Mono", "Cascadia Mono", Consolas, "Liberation Mono", monospace;
+  --shadow: 0 6px 24px rgba(0,0,0,.45);
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: var(--fs-md)/1.55 var(--font-ui);
+  -webkit-font-smoothing: antialiased;
+  overscroll-behavior: none;
+}
+button, input, select { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* 数字一律等宽并表格对齐，价格列才能对齐 */
+.num, td.num, .mono { font-family: var(--font-num); font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
+.up   { color: var(--up); }
+.down { color: var(--down); }
+.flat { color: var(--flat); }
+
+/* ==========================================================================
+   顶栏：品牌 / 行情条 / 操作
+   ========================================================================== */
+.topbar {
+  display: flex; align-items: center; gap: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  background: var(--bg-raised);
+  border-bottom: 1px solid var(--line);
+  position: sticky; top: 0; z-index: 30;
+}
+.brand { display: flex; flex-direction: column; line-height: 1.2; }
+.brand-name { font-size: var(--fs-xl); font-weight: 700; letter-spacing: .04em; }
+.brand-sub { font-size: var(--fs-xs); color: var(--text-faint); }
+.ticker { display: flex; flex-wrap: wrap; gap: var(--space-4); margin-left: auto; }
+.tick { display: flex; flex-direction: column; align-items: flex-end; line-height: 1.25; }
+.tick-label { font-size: var(--fs-xs); color: var(--text-faint); }
+.tick-value { font-family: var(--font-num); font-variant-numeric: tabular-nums; font-size: var(--fs-lg); font-weight: 600; }
+.topbar-actions { display: flex; gap: var(--space-2); }
+.btn {
+  background: var(--bg-sunken); border: 1px solid var(--line);
+  color: var(--text-dim); padding: 6px 12px; border-radius: var(--radius-sm);
+  transition: border-color .12s, color .12s, background .12s;
+}
+.btn:hover { border-color: var(--accent); color: var(--text); }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+.btn-primary { background: var(--accent); border-color: var(--accent); color: #1a1206; font-weight: 600; }
+.btn-primary:hover { background: #e8b455; }
+.btn-sell { background: var(--down-soft); border-color: var(--down); color: var(--down); font-weight: 600; }
+.btn-sell:hover { background: var(--down); color: #05130c; }
+.btn-buy { background: var(--up-soft); border-color: var(--up); color: var(--up); font-weight: 600; }
+.btn-buy:hover { background: var(--up); color: #1b0507; }
+.btn-sm { padding: 3px 8px; font-size: var(--fs-xs); }
+
+/* ==========================================================================
+   布局：桌面三栏 / 移动端单选
+   ========================================================================== */
+.layout {
+  display: grid; gap: var(--space-3); padding: var(--space-3);
+  grid-template-columns: minmax(260px, 300px) minmax(0, 1fr) minmax(280px, 340px);
+  align-items: start;
+}
+.panel {
+  background: var(--bg-raised); border: 1px solid var(--line);
+  border-radius: var(--radius-md); overflow: hidden;
+}
+.panel-head {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--line-soft);
+  background: linear-gradient(180deg, rgba(255,255,255,.02), transparent);
+}
+.panel-title { font-size: var(--fs-sm); color: var(--text-dim); font-weight: 600; }
+.panel-body { padding: var(--space-3); }
+.panel-body.tight { padding: var(--space-2); }
+.scroll { overflow-y: auto; }
+.mobile-tabs { display: none; }
+
+/* ==========================================================================
+   账户卡片 / 持仓表
+   ========================================================================== */
+.acct-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-2) var(--space-3); }
+.acct-cell { display: flex; flex-direction: column; }
+.acct-label { font-size: var(--fs-xs); color: var(--text-faint); }
+.acct-value { font-family: var(--font-num); font-variant-numeric: tabular-nums; font-size: var(--fs-lg); font-weight: 600; }
+.acct-value.big { font-size: var(--fs-2xl); }
+
+table.grid { width: 100%; border-collapse: collapse; font-size: var(--fs-sm); }
+table.grid th {
+  text-align: right; font-weight: 500; color: var(--text-faint);
+  font-size: var(--fs-xs); padding: var(--space-1) var(--space-2);
+  border-bottom: 1px solid var(--line-soft); white-space: nowrap;
+}
+table.grid th:first-child, table.grid td:first-child { text-align: left; }
+table.grid td { text-align: right; padding: var(--space-2); border-bottom: 1px solid var(--line-soft); white-space: nowrap; }
+table.grid tbody tr { cursor: pointer; }
+table.grid tbody tr:hover { background: rgba(255,255,255,.03); }
+table.grid tbody tr.is-active { background: var(--accent-soft); }
+table.grid tbody tr.is-active td:first-child { box-shadow: inset 2px 0 0 var(--accent); }
+.stock-name { display: block; font-weight: 600; }
+.stock-code { display: block; font-size: var(--fs-xs); color: var(--text-faint); font-family: var(--font-num); }
+.board-tag {
+  font-size: 10px; padding: 0 4px; border-radius: 2px; margin-left: 4px;
+  border: 1px solid var(--line); color: var(--text-faint); vertical-align: 1px;
+}
+.board-tag.star { border-color: #6b5bd2; color: #a99df0; }
+.board-tag.growth { border-color: #4a90d9; color: #8dbdf0; }
+.board-tag.st { border-color: var(--danger); color: var(--danger); }
+
+/* 行情表 */
+.market-table { max-height: 46vh; overflow-y: auto; }
+.chg-pill {
+  display: inline-block; min-width: 62px; text-align: right;
+  font-family: var(--font-num); font-variant-numeric: tabular-nums; font-weight: 600;
+}
+
+/* ==========================================================================
+   图表区
+   ========================================================================== */
+.chart-head { display: flex; align-items: baseline; gap: var(--space-3); flex-wrap: wrap; }
+.chart-title { font-size: var(--fs-xl); font-weight: 700; }
+.chart-price { font-family: var(--font-num); font-size: var(--fs-2xl); font-weight: 700; font-variant-numeric: tabular-nums; }
+.chart-meta { font-size: var(--fs-xs); color: var(--text-faint); font-family: var(--font-num); }
+#kline, #kline-fallback { width: 100%; height: 300px; }
+#equity, #equity-fallback { width: 100%; height: 150px; }
+.chart-fallback { display: block; background: var(--bg-sunken); border-radius: var(--radius-sm); }
+.fallback-note {
+  font-size: var(--fs-xs); color: var(--text-faint);
+  border: 1px dashed var(--line); border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-2); margin-bottom: var(--space-2);
+}
+
+/* ==========================================================================
+   交易区
+   ========================================================================== */
+.trade-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-3); }
+.field { display: flex; flex-direction: column; gap: var(--space-1); margin-bottom: var(--space-2); }
+.field label { font-size: var(--fs-xs); color: var(--text-faint); }
+.field input, .field select {
+  background: var(--bg-sunken); border: 1px solid var(--line); border-radius: var(--radius-sm);
+  padding: 6px 8px; font-family: var(--font-num); font-variant-numeric: tabular-nums;
+}
+.field input:focus, .field select:focus { border-color: var(--accent); }
+.hint { font-size: var(--fs-xs); color: var(--text-faint); }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: var(--radius-sm); overflow: hidden; }
+.seg button { background: transparent; border: 0; padding: 5px 12px; color: var(--text-dim); font-size: var(--fs-sm); }
+.seg button.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.trade-actions { display: flex; gap: var(--space-2); margin-top: var(--space-2); }
+
+/* ==========================================================================
+   新闻流 / 情绪
+   ========================================================================== */
+.news-list { max-height: 44vh; overflow-y: auto; display: flex; flex-direction: column; }
+.news-item { padding: var(--space-2) var(--space-3); border-bottom: 1px solid var(--line-soft); }
+.news-item:last-child { border-bottom: 0; }
+.news-tags { display: flex; gap: var(--space-1); align-items: center; margin-bottom: 2px; }
+.news-tag { font-size: 10px; padding: 0 4px; border-radius: 2px; border: 1px solid var(--line); color: var(--text-faint); }
+.news-tag.rumor { border-color: var(--accent); color: var(--accent); }
+.news-tag.bad { border-color: var(--danger); color: var(--danger); }
+.news-tag.good { border-color: var(--up); color: var(--up); }
+.news-text { font-size: var(--fs-md); }
+.news-text .sym { font-weight: 600; }
+
+.emo-bar { height: 8px; border-radius: 4px; background: var(--bg-sunken); overflow: hidden; position: relative; }
+.emo-fill { height: 100%; background: linear-gradient(90deg, var(--down), var(--flat), var(--up)); transition: width .3s; }
+.emo-scale { display: flex; justify-content: space-between; font-size: var(--fs-xs); color: var(--text-faint); margin-top: 2px; }
+
+/* ==========================================================================
+   提示条 / 弹层
+   ========================================================================== */
+#notices { position: fixed; right: var(--space-4); bottom: var(--space-4); z-index: 60; display: flex; flex-direction: column; gap: var(--space-2); max-width: 340px; }
+.notice {
+  background: var(--bg-raised); border: 1px solid var(--line); border-left: 3px solid var(--accent);
+  border-radius: var(--radius-sm); padding: var(--space-2) var(--space-3); font-size: var(--fs-sm);
+  box-shadow: var(--shadow); animation: slide-in .18s ease-out;
+}
+.notice.bad { border-left-color: var(--danger); }
+.notice.good { border-left-color: var(--up); }
+@keyframes slide-in { from { opacity: 0; transform: translateX(12px); } to { opacity: 1; transform: none; } }
+
+.modal-backdrop {
+  position: fixed; inset: 0; background: rgba(4,6,9,.72); backdrop-filter: blur(2px);
+  display: flex; align-items: center; justify-content: center; padding: var(--space-4); z-index: 80;
+}
+.modal {
+  background: var(--bg-raised); border: 1px solid var(--line); border-radius: var(--radius-md);
+  box-shadow: var(--shadow); max-width: 560px; width: 100%; max-height: 86vh; overflow-y: auto;
+}
+.modal-head { padding: var(--space-4); border-bottom: 1px solid var(--line-soft); }
+.modal-title { font-size: var(--fs-xl); font-weight: 700; }
+.modal-sub { color: var(--text-faint); font-size: var(--fs-sm); margin-top: 2px; }
+.modal-body { padding: var(--space-4); }
+.modal-foot { padding: var(--space-3) var(--space-4); border-top: 1px solid var(--line-soft); display: flex; gap: var(--space-2); justify-content: flex-end; }
+.score-row { display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px solid var(--line-soft); }
+.score-row:last-child { border-bottom: 0; }
+.score-key { color: var(--text-dim); font-size: var(--fs-sm); }
+.score-val { font-family: var(--font-num); font-variant-numeric: tabular-nums; font-weight: 600; }
+.empty { color: var(--text-faint); font-size: var(--fs-sm); padding: var(--space-3); text-align: center; }
+
+/* ==========================================================================
+   响应式：移动端切换为底部标签 + 单列
+   ========================================================================== */
+@media (max-width: 1080px) {
+  .layout { grid-template-columns: 1fr; padding-bottom: 68px; }
+  .panel { display: none; }
+  .panel.is-shown { display: block; }
+  .mobile-tabs {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px;
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 40;
+    background: var(--line); border-top: 1px solid var(--line);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .mobile-tabs button {
+    background: var(--bg-raised); border: 0; padding: var(--space-3) 0;
+    color: var(--text-faint); font-size: var(--fs-sm);
+  }
+  .mobile-tabs button.on { color: var(--accent); font-weight: 600; background: var(--bg-sunken); }
+  .topbar { flex-wrap: wrap; gap: var(--space-2); }
+  .ticker { gap: var(--space-3); }
+  .tick-value { font-size: var(--fs-md); }
+  .brand-sub { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+}
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-name">股市模拟</span>
+    <span class="brand-sub">45 个交易日 · 初始资金 10 万元</span>
+  </div>
+  <div class="ticker" id="ticker"></div>
+  <div class="topbar-actions">
+    <button class="btn" id="btn-save" title="保存到浏览器本地">存档</button>
+    <button class="btn" id="btn-load" title="读取上次存档">读档</button>
+    <button class="btn" id="btn-restart" title="清空存档重新开局">重开</button>
+  </div>
+</header>
+
+<nav class="mobile-tabs" id="mobile-tabs">
+  <button data-tab="account" class="on">持仓</button>
+  <button data-tab="market">行情</button>
+  <button data-tab="news">消息</button>
+</nav>
+
+<main class="layout">
+  <section class="panel panel-account is-shown" data-tab="account">
+    <div class="panel-head"><span class="panel-title">账户总览</span><span class="hint" id="day-label"></span></div>
+    <div class="panel-body">
+      <div class="acct-grid" id="account-grid"></div>
+    </div>
+    <div class="panel-head">
+      <span class="panel-title">持仓</span>
+      <span class="hint" id="position-summary"></span>
+    </div>
+    <div class="panel-body tight"><div id="positions"></div></div>
+  </section>
+
+  <section class="panel panel-market" data-tab="market">
+    <div class="panel-head">
+      <span class="panel-title">行情</span>
+      <span class="hint" id="market-hint"></span>
+    </div>
+    <div class="panel-body">
+      <div class="chart-head">
+        <span class="chart-title" id="chart-title">—</span>
+        <span class="chart-price" id="chart-price">—</span>
+        <span class="chart-meta" id="chart-meta"></span>
+      </div>
+      <div id="chart-notice"></div>
+      <div id="kline"></div>
+      <canvas id="kline-fallback" class="chart-fallback" style="display:none"></canvas>
+      <div class="chart-meta" style="margin-top:6px">账户权益曲线（蓝）对比华夏综指（灰，等比换算）</div>
+      <div id="equity"></div>
+      <canvas id="equity-fallback" class="chart-fallback" style="display:none"></canvas>
+    </div>
+
+    <div class="panel-head"><span class="panel-title">交易</span><span class="hint" id="trade-hint"></span></div>
+    <div class="panel-body">
+      <div class="trade-grid">
+        <div>
+          <div class="field">
+            <label for="trade-qty">数量（股，100 的整数倍）</label>
+            <input id="trade-qty" type="number" min="100" step="100" value="100" inputmode="numeric">
+          </div>
+          <div class="field">
+            <label>快捷数量</label>
+            <div class="seg" id="qty-presets">
+              <button data-qty="100">1手</button>
+              <button data-qty="1000">10手</button>
+              <button data-qty="hf">半仓</button>
+              <button data-qty="all">全仓</button>
+            </div>
+          </div>
+          <div class="hint" id="qty-estimate"></div>
+        </div>
+        <div>
+          <div class="field">
+            <label>委托类型</label>
+            <div class="seg" id="order-type">
+              <button data-type="market" class="on">市价（收盘价）</button>
+              <button data-type="limit">限价</button>
+            </div>
+          </div>
+          <div class="field" id="limit-field" style="display:none">
+            <label for="trade-limit">限价（元）</label>
+            <input id="trade-limit" type="number" step="0.01" min="0.01" inputmode="decimal">
+          </div>
+          <div class="field" id="validity-field" style="display:none">
+            <label>有效期</label>
+            <select id="trade-validity"><option value="1">当日有效</option><option value="3">3 日有效</option></select>
+          </div>
+          <div class="hint">当日买入次日才可卖出（T+1）；涨停买不进、跌停卖不出。</div>
+        </div>
+      </div>
+      <div class="trade-actions">
+        <button class="btn btn-buy" id="btn-buy">买入</button>
+        <button class="btn btn-sell" id="btn-sell">卖出</button>
+        <button class="btn btn-primary" id="btn-next">收盘结算 →</button>
+      </div>
+    </div>
+
+    <div class="panel-head"><span class="panel-title">当日委托</span><span class="hint" id="order-hint"></span></div>
+    <div class="panel-body tight"><div id="orders"></div></div>
+  </section>
+
+  <section class="panel panel-news" data-tab="news">
+    <div class="panel-head"><span class="panel-title">市场情绪</span></div>
+    <div class="panel-body">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px">
+        <span id="emotion-label" style="font-weight:600">—</span>
+        <span class="num" id="emotion-value" style="font-size:var(--fs-lg)">—</span>
+      </div>
+      <div class="emo-bar"><div class="emo-fill" id="emotion-fill" style="width:50%"></div></div>
+      <div class="emo-scale"><span>冰点 0</span><span>平静 50</span><span>狂热 100</span></div>
+      <div class="hint" id="emotion-note" style="margin-top:8px"></div>
+    </div>
+    <div class="panel-head"><span class="panel-title">消息面</span><span class="hint" id="news-count"></span></div>
+    <div class="panel-body tight"><div class="news-list" id="news"></div></div>
+  </section>
+</main>
+
+<div id="notices"></div>
+<div id="modal-root"></div>
+
+<!-- ==========================================================================
+     游戏内核（纯逻辑，不触碰 DOM / localStorage，便于 node:vm 抽取测试）
+     ========================================================================== -->
+<script id="game-core">
+window.GameCore = (function () {
+  'use strict';
+
+  /* ------------------------------------------------------------------ 配置 */
+  const CONFIG = {
+    time: {
+      tradingDays: 45,
+      startDate: '2026-01-05',
+      // 2026 年春节休市（周一至周五）
+      holidays: ['2026-02-16', '2026-02-17', '2026-02-18', '2026-02-19', '2026-02-20'],
+    },
+    boards: { main: 0.10, growth: 0.20, star: 0.20, st: 0.05 },
+    regimes: {
+      up:    { drift:  0.0016, vol: 0.18, meanDays: 12, jumpMult: 1 },
+      range: { drift:  0.0001, vol: 0.20, meanDays:  9, jumpMult: 1 },
+      down:  { drift: -0.0018, vol: 0.26, meanDays: 10, jumpMult: 2 },
+      crash: { drift: -0.0060, vol: 0.45, meanDays:  3, jumpMult: 5 },
+    },
+    vol:   { alpha: 0.12, beta: 0.80, crashAlpha: 0.20, nu: 4 },
+    // B 层：无消息面的随机跳动（受硬约束）
+    jumps: {
+      maxCount: 10, dailyProb: 0.22, marketShare: 0.20, upRatio: 0.45,
+      stockMagnitude: [0.025, 0.06], marketMagnitude: [0.015, 0.03],
+    },
+    cost: {
+      commission: 0.00025, commissionMin: 5, stampTax: 0.0005,
+      transferFee: 0.00001, slippageBase: 0.0005,
+      slippageImpact: 0.005, slippageCap: 0.005,
+    },
+    rules: {
+      lotSize: 100, initialCash: 100000, cashRate: 0.015,
+      maxParticipation: 0.03, limitOrderValidity: [1, 3],
+    },
+    earnings: { forecastWindow: [8, 14], reportWindow: [28, 34], dividendDay: 33, dividendCount: 3 },
+    balance: { peadAlpha: 0.015, emotionReversal: 0.003, emotionDrift: 0.0015 },
+    index: { start: 3000, name: '华夏综指', code: '88HXCI' },
+    rating: [
+      { min:  0.20, title: '股神' },
+      { min:  0.10, title: '老手' },
+      { min:  0.03, title: '跑赢大盘' },
+      { min: -0.03, title: '与大盘同步' },
+      { min: -0.10, title: '交学费的韭菜' },
+      { min: -Infinity, title: '韭菜之王' },
+    ],
+  };
+
+  /* --------------------------------------------------- 行业与标的（全部虚构） */
+  const INDUSTRIES = [
+    { key: 'baijiu',  name: '白酒食品',   board: 'main',   beta: 0.85, secVol: 0.15, names: ['云岭酿', '稻香春', '金樽酒业'],   price: [68, 42, 128], cap: [900, 300, 1600] },
+    { key: 'bank',    name: '银行金融',   board: 'main',   beta: 0.68, secVol: 0.13, names: ['华通银行', '中原证券', '鼎盛保险'], price: [12, 18, 26],  cap: [2200, 700, 1100] },
+    { key: 'chip',    name: '半导体芯片', board: 'star',   beta: 1.35, secVol: 0.34, names: ['芯海微', '极光半导', '晶成科技'],   price: [86, 145, 52], cap: [400, 620, 260] },
+    { key: 'ev',      name: '新能源车',   board: 'growth', beta: 1.25, secVol: 0.28, names: ['远驰汽车', '伏能电池', '锂源新材'], price: [34, 96, 21],  cap: [1200, 800, 350] },
+    { key: 'pharma',  name: '医药生物',   board: 'main',   beta: 0.90, secVol: 0.22, names: ['康和药业', '贝灵生物', '济生医疗'], price: [45, 78, 29],  cap: [700, 520, 380] },
+    { key: 'defense', name: '军工航天',   board: 'growth', beta: 1.15, secVol: 0.30, names: ['长空动力', '星箭装备', '天穹电子'], price: [23, 41, 17],  cap: [450, 300, 210] },
+    { key: 'estate',  name: '房地产建筑', board: 'main',   beta: 1.05, secVol: 0.26, names: ['广厦地产', '筑基建设', '恒泰置业'], price: [9, 14, 6],   cap: [900, 420, 260] },
+    { key: 'media',   name: '互联网传媒', board: 'growth', beta: 1.30, secVol: 0.35, names: ['拾光互娱', '云栖传媒', '游鲸网络'], price: [28, 55, 19],  cap: [380, 300, 190] },
+    { key: 'metal',   name: '有色金属',   board: 'main',   beta: 1.10, secVol: 0.24, names: ['铜岭矿业', '赤金股份', '稀土新科'], price: [16, 22, 38],  cap: [600, 480, 330] },
+    { key: 'agri',    name: '农业养殖',   board: 'main',   beta: 1.00, secVol: 0.32, names: ['沃野农牧', '牧原春', '丰谷种业'],   price: [31, 47, 13],  cap: [500, 350, 180] },
+  ];
+
+  const NEWS_TEMPLATES = {
+    macroGood: ['央行宣布降准 0.5 个百分点，释放长期资金约 {n} 亿元', '监管层表态支持长期资金入市，市场预期改善', '制造业 PMI 回升至 {n}，好于市场预期'],
+    macroBad:  ['海外主要市场隔夜大跌 {n}%，避险情绪升温', '监管收紧融资通道，市场担心流动性', 'CPI 数据超预期，市场担忧货币政策转向'],
+    indGood:   ['{ind}板块迎来产业政策扶持，行业景气度回升', '{ind}下游需求超预期，机构上调行业评级', '{ind}产品价格上涨 {n}%，龙头企业受益'],
+    indBad:    ['{ind}原材料成本大幅上涨，行业毛利承压', '{ind}竞争加剧，产品价格战开启', '{ind}出口订单下滑，机构下调行业预期'],
+    stkGood:   ['{name}发布业绩预告，净利润同比预增 {n}%', '{name}公告中标大额订单，合同金额 {n} 亿元', '{name}新产品获批上市，打开成长空间'],
+    stkBad:    ['{name}公告股东拟减持不超过 {n}% 股份', '{name}业绩快报低于预告，净利润同比下滑', '{name}被曝应收账款异常，遭交易所问询'],
+    scandal:   ['{name}被立案调查，涉嫌信息披露违法违规', '{name}被曝财务造假，审计机构出具非标意见'],
+    rumorGood: ['传闻：{name}正在洽谈并购重组（未经证实）', '传闻：{ind}板块将获政策支持（未经证实）'],
+    rumorBad:  ['传闻：{name}大股东资金链紧张（未经证实）', '传闻：监管将收紧{ind}行业融资（未经证实）'],
+    ambient:   ['两市成交额 {n} 亿元，市场情绪平稳', '北向资金今日净流入 {n} 亿元', '本周将有 {n} 只新股申购'],
+  };
+
+  /* --------------------------------------------------------------- 随机数 */
+  /**
+   * mulberry32 种子随机数发生器。同一种子必然产生完全相同的序列，
+   * 这是"存档可复现"与"测试可断言"的基础。
+   */
+  function createRng(seed) {
+    let a = (seed >>> 0) || 1;
+    const next = () => {
+      a = (a + 0x6D2B79F5) | 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+    const normal = () => {
+      let u = 0, v = 0;
+      while (u === 0) u = next();
+      while (v === 0) v = next();
+      return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+    };
+    /** 标准化学生 t 分布（厚尾），用于让暴涨暴跌比正态更频繁。 */
+    const studentT = (nu) => {
+      let chi2 = 0;
+      for (let i = 0; i < nu; i++) { const z = normal(); chi2 += z * z; }
+      const t = normal() / Math.sqrt(chi2 / nu);
+      return t / Math.sqrt(nu / (nu - 2)); // 方差归一
+    };
+    const range = (lo, hi) => lo + (hi - lo) * next();
+    const int = (lo, hi) => Math.floor(lo + (hi - lo + 1) * next());
+    const pick = (arr) => arr[Math.floor(next() * arr.length)];
+    const shuffle = (arr) => {
+      const out = arr.slice();
+      for (let i = out.length - 1; i > 0; i--) {
+        const j = Math.floor(next() * (i + 1));
+        [out[i], out[j]] = [out[j], out[i]];
+      }
+      return out;
+    };
+    /** 从 weights 指定的离散分布中取一个下标。 */
+    const weightedIndex = (weights) => {
+      const total = weights.reduce((s, w) => s + w, 0);
+      let r = next() * total;
+      for (let i = 0; i < weights.length; i++) { r -= weights[i]; if (r <= 0) return i; }
+      return weights.length - 1;
+    };
+    return { next, normal, studentT, range, int, pick, shuffle, weightedIndex, seed: seed >>> 0 };
+  }
+
+  /* ------------------------------------------------------------- 交易日历 */
+  /** 按本地日历取 ISO 日期：不能用 toISOString()，否则东八区会整体差一天。 */
+  function isoOf(date) {
+    const m = String(date.getMonth() + 1).padStart(2, '0');
+    const d = String(date.getDate()).padStart(2, '0');
+    return `${date.getFullYear()}-${m}-${d}`;
+  }
+
+  function buildCalendar(config) {
+    const holidays = new Set(config.time.holidays);
+    const days = [];
+    const cursor = new Date(config.time.startDate + 'T00:00:00');
+    while (days.length < config.time.tradingDays) {
+      const dow = cursor.getDay();
+      const iso = isoOf(cursor);
+      if (dow !== 0 && dow !== 6 && !holidays.has(iso)) {
+        days.push({ index: days.length, iso, label: `${cursor.getMonth() + 1}月${cursor.getDate()}日` });
+      }
+      cursor.setDate(cursor.getDate() + 1);
+    }
+    return days;
+  }
+
+  /* ------------------------------------------------------- 市场状态与事件 */
+  /** 生成 45 天的大盘状态时间线（半马尔可夫：状态有惯性）。 */
+  function buildRegimePlan(rng, totalDays, config) {
+    const order = ['up', 'range', 'down', 'crash'];
+    const nextWeights = {
+      up:    { up: 0.55, range: 0.30, down: 0.15, crash: 0.00 },
+      range: { up: 0.35, range: 0.30, down: 0.33, crash: 0.02 },
+      down:  { up: 0.22, range: 0.28, down: 0.42, crash: 0.08 },
+      crash: { up: 0.35, range: 0.45, down: 0.20, crash: 0.00 },
+    };
+    const plan = [];
+    let used = 0;
+    let current = 'range';
+    while (used < totalDays) {
+      const spec = config.regimes[current];
+      const dur = Math.max(3, Math.round(spec.meanDays * rng.range(0.7, 1.3)));
+      const take = Math.min(dur, totalDays - used);
+      plan.push({ state: current, start: used, days: take });
+      used += take;
+      const w = nextWeights[current];
+      current = order[rng.weightedIndex(order.map((k) => w[k]))];
+    }
+    return plan;
+  }
+
+  function regimeAt(plan, dayIndex) {
+    for (const seg of plan) if (dayIndex >= seg.start && dayIndex < seg.start + seg.days) return seg.state;
+    return 'range';
+  }
+
+  /**
+   * 生成 45 天的事件时间线。价格由这些事件驱动，所以玩家读到的新闻
+   * 与随后的走势必然自洽（先事件、后价格）。
+   */
+  function buildEvents(rng, stocks, calendar, config) {
+    const events = [];
+    const push = (e) => events.push(e);
+
+    /* 宏观事件：影响整个市场 */
+    const macroCount = rng.int(3, 5);
+    const macroDays = rng.shuffle(calendar.map((d) => d.index)).slice(0, macroCount).sort((a, b) => a - b);
+    for (const day of macroDays) {
+      const good = rng.next() < 0.55;
+      const magnitude = rng.range(0.0012, 0.0035);
+      push({
+        day, scope: 'market', tone: good ? 'good' : 'bad',
+        driftPerDay: (good ? 1 : -1) * magnitude,
+        duration: rng.int(3, 8),
+        headline: renderTemplate(rng, good ? 'macroGood' : 'macroBad', {}),
+      });
+    }
+
+    /* 行业事件 */
+    const indCount = rng.int(4, 6);
+    for (let i = 0; i < indCount; i++) {
+      const day = rng.int(3, config.time.tradingDays - 6);
+      const indIdx = rng.int(0, INDUSTRIES.length - 1);
+      const good = rng.next() < 0.5;
+      push({
+        day, scope: 'industry', key: indIdx, tone: good ? 'good' : 'bad',
+        driftPerDay: (good ? 1 : -1) * rng.range(0.0018, 0.0045),
+        duration: rng.int(4, 12),
+        headline: renderTemplate(rng, good ? 'indGood' : 'indBad', { ind: INDUSTRIES[indIdx].name }),
+      });
+    }
+
+    /* 公司事件：业绩预告（贴合 1 月）、年报快报、订单、减持、暴雷 */
+    const forecastStart = config.earnings.forecastWindow[0];
+    const reportStart = config.earnings.reportWindow[0];
+    stocks.forEach((s, idx) => {
+      // 业绩预告：超预期者产生 PEAD 漂移
+      const surprise = rng.normal() * 0.18 + s.quality * 0.12;
+      const day = rng.int(forecastStart, config.earnings.forecastWindow[1]);
+      push({
+        day, scope: 'stock', key: idx, tone: surprise > 0 ? 'good' : 'bad', kind: 'forecast',
+        surprise,
+        driftPerDay: Math.sign(surprise) * config.balance.peadAlpha * Math.min(1, Math.abs(surprise) / 0.2) / 10,
+        duration: 8,
+        headline: `${s.name}发布业绩预告，净利润同比${surprise >= 0 ? '预增' : '预减'} ${Math.abs(surprise * 100).toFixed(0)}%`,
+        isAnnouncement: true,
+      });
+      // 年报快报：可能打脸预告
+      if (rng.next() < 0.7) {
+        const gap = rng.normal() * 0.15;
+        const rDay = rng.int(reportStart, config.earnings.reportWindow[1]);
+        push({
+          day: rDay, scope: 'stock', key: idx, tone: gap > 0 ? 'good' : 'bad', kind: 'report',
+          driftPerDay: Math.sign(gap) * rng.range(0.001, 0.0035),
+          duration: 5,
+          headline: `${s.name}披露年报快报，净利润${gap >= 0 ? '高于' : '低于'}此前预告`,
+          isAnnouncement: true,
+        });
+      }
+      // 随机公司喜讯
+      if (rng.next() < 0.35) {
+        push({
+          day: rng.int(4, config.time.tradingDays - 5), scope: 'stock', key: idx, tone: 'good', kind: 'order',
+          driftPerDay: rng.range(0.002, 0.005), duration: rng.int(3, 6),
+          headline: renderTemplate(rng, 'stkGood', { name: s.name }),
+          isAnnouncement: true,
+        });
+      }
+      // 随机公司利空
+      if (rng.next() < 0.30) {
+        push({
+          day: rng.int(4, config.time.tradingDays - 5), scope: 'stock', key: idx, tone: 'bad', kind: 'reduce',
+          driftPerDay: -rng.range(0.0015, 0.004), duration: rng.int(3, 6),
+          headline: renderTemplate(rng, 'stkBad', { name: s.name }),
+          isAnnouncement: true,
+        });
+      }
+    });
+
+    /* 暴雷：A 层最强负面，以连续跌停兑现，并可能变 ST */
+    const scandalCount = rng.int(1, 2);
+    const scandalTargets = rng.shuffle(stocks.map((_, i) => i)).slice(0, scandalCount);
+    for (const idx of scandalTargets) {
+      const day = rng.int(10, config.time.tradingDays - 8);
+      push({
+        day, scope: 'stock', key: idx, tone: 'bad', kind: 'scandal',
+        driftPerDay: 0, duration: 0, limitStreak: { dir: 'down', days: rng.int(2, 3) },
+        becomesST: true,
+        headline: renderTemplate(rng, 'scandal', { name: stocks[idx].name }),
+        isAnnouncement: true,
+      });
+    }
+
+    /* 传闻：不驱动价格，只制造噪音（约 30% 的消息不真实） */
+    const rumorCount = rng.int(5, 8);
+    for (let i = 0; i < rumorCount; i++) {
+      const day = rng.int(2, config.time.tradingDays - 2);
+      const tpl = rng.pick(['rumorGood', 'rumorBad']);
+      const idx = rng.int(0, stocks.length - 1);
+      push({
+        day, scope: 'none', tone: 'rumor', kind: 'rumor',
+        driftPerDay: 0, duration: 0,
+        headline: renderTemplate(rng, tpl, { name: stocks[idx].name, ind: INDUSTRIES[stocks[idx].industryIdx].name }),
+      });
+    }
+
+    /* 氛围消息：纯文字，无价格影响 */
+    const ambientCount = rng.int(10, 16);
+    for (let i = 0; i < ambientCount; i++) {
+      push({
+        day: rng.int(0, config.time.tradingDays - 1), scope: 'none', tone: 'neutral', kind: 'ambient',
+        driftPerDay: 0, duration: 0,
+        headline: renderTemplate(rng, 'ambient', {}),
+      });
+    }
+
+    events.sort((a, b) => a.day - b.day || a.scope.localeCompare(b.scope));
+    return events;
+  }
+
+  function renderTemplate(rng, key, vars) {
+    let text = rng.pick(NEWS_TEMPLATES[key]);
+    return text
+      .replace('{name}', vars.name ?? '某公司')
+      .replace('{ind}', vars.ind ?? '该')
+      .replace(/\{n\}/g, () => (Math.round(rng.range(5, 480) * 10) / 10).toString());
+  }
+
+  /**
+   * B 层随机跳动日程。硬约束：
+   *  - 45 天内最多 10 次
+   *  - 每个交易日最多 1 次（通过抽取互不重复的日子从结构上保证）
+   *  - 幅度上限 6%，严格小于事件驱动的暴雷/暴涨
+   */
+  function buildJumpPlan(rng, stocks, totalDays, config) {
+    const J = config.jumps;
+    // 二项分布抽样，再截断到硬上限
+    let count = 0;
+    for (let i = 0; i < totalDays; i++) if (rng.next() < J.dailyProb) count++;
+    count = Math.min(count, J.maxCount, totalDays);
+
+    const days = rng.shuffle(Array.from({ length: totalDays }, (_, i) => i)).slice(0, count).sort((a, b) => a - b);
+    return days.map((day) => {
+      const isMarket = rng.next() < J.marketShare;
+      const up = rng.next() < J.upRatio;
+      if (isMarket) {
+        const mag = rng.range(J.marketMagnitude[0], J.marketMagnitude[1]);
+        return { day, scope: 'market', magnitude: up ? mag : -mag };
+      }
+      // 个股级：按特质波动加权，小盘题材股更容易跳
+      const idx = rng.weightedIndex(stocks.map((s) => s.idioVol));
+      const mag = rng.range(J.stockMagnitude[0], J.stockMagnitude[1]);
+      return { day, scope: 'stock', key: idx, magnitude: up ? mag : -mag };
+    });
+  }
+
+  /* --------------------------------------------------------------- 世界生成 */
+  function generateWorld(seed, overrides) {
+    const config = deepMerge(CONFIG, overrides ?? {});
+    const rng = createRng(seed);
+    const calendar = buildCalendar(config);
+
+    const stocks = [];
+    INDUSTRIES.forEach((ind, industryIdx) => {
+      ind.names.forEach((name, j) => {
+        const idx = stocks.length;
+        const code = String(880000 + (industryIdx + 1) * 100 + (j + 1));
+        stocks.push({
+          index: idx,
+          code,
+          name,
+          industryIdx,
+          industry: ind.name,
+          board: ind.board,
+          limit: config.boards[ind.board],
+          beta: clamp(rng.normal() * 0.25 + 1.0, 0.4, 1.8),
+          idioVol: rng.range(0.25, 0.60),
+          // 真实 alpha：全程不向玩家暴露，只能靠财报与走势去猜
+          alpha: rng.normal() * 0.08,
+          quality: rng.normal() * 0.5,
+          price0: ind.price[j],
+          floatCap: ind.cap[j] * 1e8,
+          baseTurnover: rng.range(0.008, 0.035),
+          eps0: ind.price[j] / rng.range(12, 45),
+          growth: rng.normal() * 0.15 + 0.08,
+          st: false,
+          dividendYield: 0,
+        });
+      });
+    });
+
+    const regimePlan = buildRegimePlan(rng, config.time.tradingDays, config);
+    const events = buildEvents(rng, stocks, calendar, config);
+    const jumpPlan = buildJumpPlan(rng, stocks, config.time.tradingDays, config);
+
+    // 分红：抽 2~3 家公司，在指定日除息
+    const divTargets = rng.shuffle(stocks.map((_, i) => i)).slice(0, config.earnings.dividendCount);
+    const dividends = divTargets.map((idx) => {
+      const yieldPct = rng.range(0.015, 0.03);
+      stocks[idx].dividendYield = yieldPct;
+      return { day: config.earnings.dividendDay, stockIdx: idx, yield: yieldPct };
+    });
+
+    return { seed: rng.seed, config, calendar, stocks, regimePlan, events, jumpPlan, dividends, industries: INDUSTRIES };
+  }
+
+  /* --------------------------------------------------------------- 行情模拟 */
+  /**
+   * 一次性生成全部 45 天行情。未来数据只存在于返回值里，
+   * UI 只被允许读取 ≤ 当前交易日的数据（防剧透靠这一层约定）。
+   */
+  function simulate(world) {
+    const { config, calendar, stocks, regimePlan, events, jumpPlan, dividends } = world;
+    const total = calendar.length;
+    // 模拟阶段使用独立随机流：同一 seed 必然得到同一段行情（可复现、可测试）
+    const rng0 = createRng((world.seed ^ 0x9e3779b9) >>> 0);
+    const industryHeat = new Array(INDUSTRIES.length).fill(0);
+    // 当日消息面情绪（用于驱动股民情绪指数）
+    const tonesByDay = {};
+    for (const e of events) {
+      if (e.scope === 'none') continue;
+      const sign = e.tone === 'good' ? 1 : e.tone === 'bad' ? -1 : 0;
+      tonesByDay[e.day] = (tonesByDay[e.day] ?? 0) + sign;
+    }
+    // 春节前后：节前缩量、节后开门红的日历效应
+    const quietDays = preHolidayDays(calendar, config);
+    const reopenDay = calendar.findIndex((d) => d.iso > config.time.holidays[config.time.holidays.length - 1]);
+
+    // 事件按天、按作用域摊平，便于逐日查表
+    const marketDrift = new Array(total).fill(0);
+    const industryDrift = INDUSTRIES.map(() => new Array(total).fill(0));
+    const stockDrift = stocks.map(() => new Array(total).fill(0));
+    const limitForced = new Map();   // `${stockIdx}:${day}` -> 'up' | 'down'
+    const stFrom = new Array(stocks.length).fill(Infinity);
+
+    for (const e of events) {
+      if (e.scope === 'none') continue;
+      for (let d = e.day; d < Math.min(total, e.day + e.duration); d++) {
+        if (e.scope === 'market') marketDrift[d] += e.driftPerDay;
+        else if (e.scope === 'industry') industryDrift[e.key][d] += e.driftPerDay;
+        else stockDrift[e.key][d] += e.driftPerDay;
+      }
+      if (e.limitStreak) {
+        for (let k = 0; k < e.limitStreak.days; k++) {
+          const d = e.day + 1 + k; // 公告次日开始连续跌停
+          if (d < total) limitForced.set(`${e.key}:${d}`, e.limitStreak.dir);
+        }
+      }
+      if (e.becomesST) stFrom[e.key] = Math.min(stFrom[e.key], e.day + 1);
+    }
+
+    const jumpAt = new Map(jumpPlan.map((j) => [j.day, j]));
+
+    // 情绪与波动率是逐日递推的，必须按顺序生成
+    const emotion = new Array(total).fill(50);
+    const indexBars = [];
+    const dayBars = stocks.map(() => []);
+    let sigma2 = Math.pow(0.20 / Math.sqrt(252), 2);
+    let lastShock = 0;
+    let indexClose = config.index.start;
+    let emo = 50;
+    const recentReturns = [];
+
+    for (let t = 0; t < total; t++) {
+      const state = regimeAt(regimePlan, t);
+      const spec = config.regimes[state];
+      const targetDailyVol = spec.vol / Math.sqrt(252);
+
+      // GARCH(1,1)：波动率聚集（大跌之后还是大波动）
+      const alpha = state === 'crash' ? config.vol.crashAlpha : config.vol.alpha;
+      const beta = config.vol.beta;
+      const omega = Math.max(1e-8, (1 - alpha - beta) * targetDailyVol * targetDailyVol);
+      sigma2 = omega + alpha * lastShock * lastShock + beta * sigma2;
+      const sigma = Math.sqrt(sigma2);
+
+      // 情绪对短期漂移与波动的作用
+      const emoDrift = (emo - 50) / 50 * config.balance.emotionDrift;
+      const emoVolMult = 0.8 + emo / 100;
+
+      const z = clamp(rng0.studentT(config.vol.nu) * 0.85, -6, 6);
+      const shock = sigma * emoVolMult * z;
+      lastShock = shock;
+
+      let marketReturn = spec.drift + shock + marketDrift[t] + emoDrift;
+      if (t === reopenDay) marketReturn += 0.004;   // 节后开门红的日历效应
+      const mj = jumpAt.get(t);
+      if (mj && mj.scope === 'market') marketReturn += mj.magnitude;
+
+      const indexPrev = indexClose;
+      const ib = makeBar(indexPrev, marketReturn, sigma, null, null, rng0);
+      indexClose = ib.close;
+      indexBars.push({
+        day: t, date: calendar[t].iso, label: calendar[t].label,
+        open: ib.open, high: ib.high, low: ib.low, close: ib.close,
+        prevClose: indexPrev, volume: 0, amount: 0,
+      });
+      recentReturns.push(marketReturn);
+      if (recentReturns.length > 5) recentReturns.shift();
+      const mom5 = recentReturns.reduce((s, v) => s + v, 0);
+
+      // 情绪更新：向"由近期行情与新闻决定的目标"靠拢
+      const newsTone = tonesByDay[t] ?? 0;
+      const targetEmo = clamp(50 + mom5 * 900 + newsTone * 8, 5, 95);
+      emo = clamp(emo + 0.28 * (targetEmo - emo) + rng0.normal() * 2.5, 0, 100);
+      emotion[t] = emo;
+
+      // 行业 → 个股
+      INDUSTRIES.forEach((ind, i) => {
+        const heat = industryHeat[i];
+        const secShock = ind.secVol / Math.sqrt(252) * rng0.normal();
+        const indReturn = ind.beta * marketReturn + heat + secShock + industryDrift[i][t];
+        industryHeat[i] = heat * 0.9 + rng0.normal() * (ind.secVol / Math.sqrt(252)) * 0.5;
+
+        stocks.filter((s) => s.industryIdx === i).forEach((s) => {
+          const bars = dayBars[s.index];
+          const prev = bars.length ? bars[bars.length - 1].close : s.price0;
+
+          // ST 状态变更：暴雷次日起涨跌停收窄至 ±5%（不改动共享的 world 对象）
+          const isST = t >= stFrom[s.index];
+          const limitPct = isST ? config.boards.st : s.limit;
+
+          let r = s.beta * indReturn
+            + s.alpha / 252
+            + (s.idioVol / Math.sqrt(252)) * rng0.studentT(config.vol.nu)
+            + stockDrift[s.index][t];
+
+          const sj = jumpAt.get(t);
+          if (sj && sj.scope === 'stock' && sj.key === s.index) r += sj.magnitude;
+
+          // 除息：价格下调，现金由组合层派发
+          const div = dividends.find((d) => d.day === t && d.stockIdx === s.index);
+          if (div) r -= div.yield;
+
+          // A 层暴雷：强制连续跌停（一字板，卖不出去）
+          const forced = limitForced.get(`${s.index}:${t}`);
+          let bar;
+          if (forced) {
+            const limitPrice = round2(prev * (1 + (forced === 'down' ? -limitPct : limitPct)));
+            bar = { open: limitPrice, high: limitPrice, low: limitPrice, close: limitPrice, forced: true };
+          } else {
+            const clipped = clamp(r, -limitPct, limitPct);
+            bar = makeBar(prev, clipped, sigma, r, limitPct, rng0);
+          }
+
+          // 成交量：随波动、情绪、节前缩量
+          const seasonal = quietDays.has(t) ? 0.7 : 1;
+          const turnover = s.baseTurnover
+            * (1 + 2.5 * Math.abs((bar.close - prev) / prev))
+            * (0.6 + emo / 100)
+            * seasonal
+            * Math.exp(rng0.normal() * 0.4 - 0.08);
+          const volume = Math.max(1, (s.floatCap / bar.close) * turnover);
+          const amount = volume * bar.close;
+
+          bars.push({
+            day: t, date: calendar[t].iso, label: calendar[t].label,
+            open: bar.open, high: bar.high, low: bar.low, close: bar.close,
+            prevClose: prev, volume: Math.round(volume), amount,
+            limitUp: round2(prev * (1 + limitPct)), limitDown: round2(prev * (1 - limitPct)),
+            st: isST, forced: !!bar.forced,
+          });
+        });
+      });
+    }
+
+    return {
+      world,
+      calendar,
+      index: indexBars,
+      stocks: stocks.map((s, i) => ({ ...s, days: dayBars[i] })),
+      emotion,
+      news: buildNewsByDay(world, total),
+      meta: { totalDays: total },
+    };
+  }
+
+  function buildNewsByDay(world, total) {
+    const byDay = Array.from({ length: total }, () => []);
+    for (const e of world.events) {
+      if (e.day < 0 || e.day >= total) continue;
+      // 只有 kind === 'rumor' 的条目才是真正不影响价格的传闻
+      const rumor = e.kind === 'rumor';
+      byDay[e.day].push({
+        scope: e.scope, tone: e.tone, kind: e.kind,
+        stockIdx: e.scope === 'stock' ? e.key : null,
+        industryIdx: e.scope === 'industry' ? e.key : null,
+        headline: e.headline,
+        rumor,
+      });
+    }
+    return byDay;
+  }
+
+  /** 春节前最后几个交易日的位置（休市日本身不产生交易日）。 */
+  function preHolidayDays(calendar, config) {
+    const lastHoliday = config.time.holidays[config.time.holidays.length - 1];
+    const set = new Set();
+    const firstAfter = calendar.findIndex((d) => d.iso > lastHoliday);
+    if (firstAfter < 0) return set;
+    for (let k = 1; k <= 3; k++) if (firstAfter - k >= 0) set.add(firstAfter - k);
+    return set;
+  }
+
+  /** 由日收益合成一根 OHLC（布朗桥近似日内路径极值）。 */
+  function makeBar(prev, ret, sigma, rawRet, limitPct, rng) {
+    const close = round2(prev * (1 + ret));
+    const gap = rng.normal() * sigma * 0.35;
+    let open = round2(prev * (1 + gap));
+    const span = Math.abs(close - open);
+    const wiggle = (span + prev * sigma * 0.6) * Math.abs(rng.normal()) * 0.5;
+    let high = round2(Math.max(open, close) + wiggle);
+    let low = round2(Math.min(open, close) - wiggle * 0.9);
+    if (limitPct) {
+      high = Math.min(high, round2(prev * (1 + limitPct)));
+      low = Math.max(low, round2(prev * (1 - limitPct)));
+    }
+    high = Math.max(high, open, close);
+    low = Math.min(low, open, close);
+    low = Math.max(low, 0.5);
+    return { open, high, low, close };
+  }
+
+  /* ------------------------------------------------------------------ 工具 */
+  function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
+  function round2(v) { return Math.round(v * 100) / 100; }
+  function deepMerge(base, over) {
+    if (Array.isArray(base)) return over ?? base;
+    if (typeof base !== 'object' || base === null) return over === undefined ? base : over;
+    const out = { ...base };
+    for (const k of Object.keys(over ?? {})) {
+      out[k] = (k in base) ? deepMerge(base[k], over[k]) : over[k];
+    }
+    return out;
+  }
+
+  /* -------------------------------------------------------------- 组合账户 */
+  function createPortfolio(cash) {
+    return {
+      cash,
+      positions: {},      // stockIdx -> { qty, available, frozen, avgCost, realized }
+      equityCurve: [],
+      feeTotal: 0,
+      trades: [],
+      closedTrades: [],
+    };
+  }
+
+  function positionOf(pf, idx) {
+    if (!pf.positions[idx]) {
+      pf.positions[idx] = { stockIdx: idx, qty: 0, available: 0, frozen: 0, avgCost: 0, realized: 0 };
+    }
+    return pf.positions[idx];
+  }
+
+  /** 每个交易日开始时调用：把昨日买入的股票变为可卖。 */
+  function startDay(pf) {
+    for (const pos of Object.values(pf.positions)) pos.available = pos.qty - pos.frozen;
+  }
+
+  function buyFees(value, config) {
+    const c = config.cost;
+    return Math.max(c.commissionMin, value * c.commission) + value * c.transferFee;
+  }
+  function sellFees(value, config) {
+    const c = config.cost;
+    return Math.max(c.commissionMin, value * c.commission)
+      + value * c.stampTax
+      + value * c.transferFee;
+  }
+
+  /* ---------------------------------------------------------------- 撮合器 */
+  function createBroker(portfolio, market, config) {
+    const state = {
+      day: 0,                       // 当前待结算的交易日
+      orders: [],
+      orderSeq: 1,
+      notices: [],
+      finished: false,
+    };
+
+    function barOf(stockIdx, day) { return market.stocks[stockIdx].days[day]; }
+
+    /** 下单：只会挂到当日结算时撮合，玩家看不到当日价格。 */
+    function placeOrder(req) {
+      if (state.finished) return fail('本局已结束');
+      const s = market.stocks[req.stockIdx];
+      if (!s) return fail('标的不存在');
+      const lot = config.rules.lotSize;
+      const qty = Math.floor(req.qty / lot) * lot;
+      if (!(qty >= lot)) return fail(`数量必须是 ${lot} 股的整数倍`);
+
+      const refBar = state.day > 0 ? barOf(req.stockIdx, state.day - 1) : null;
+      const refPrice = refBar ? refBar.close : s.price0;
+
+      if (req.type === 'limit') {
+        if (!(req.limitPrice > 0)) return fail('限价必须大于 0');
+      }
+
+      if (req.side === 'buy') {
+        const est = qty * refPrice * (1 + config.cost.slippageCap + 0.01);
+        if (est > portfolio.cash) return fail('可用资金不足（按昨收价估算）');
+      } else {
+        const pos = positionOf(portfolio, req.stockIdx);
+        if (qty > pos.available) {
+          return fail(`可卖数量不足：可卖 ${pos.available} 股（当日买入的股票次日才可卖）`);
+        }
+        pos.frozen += qty;
+      }
+
+      const order = {
+        id: state.orderSeq++,
+        stockIdx: req.stockIdx,
+        side: req.side,
+        type: req.type,
+        qty,
+        limitPrice: req.type === 'limit' ? round2(req.limitPrice) : null,
+        placedDay: state.day,
+        remainingDays: req.type === 'limit'
+          ? clamp(Number(req.validity) || 1, config.rules.limitOrderValidity[0], config.rules.limitOrderValidity[1])
+          : 1,
+      };
+      state.orders.push(order);
+      return { ok: true, order };
+    }
+
+    function cancelOrder(id) {
+      const i = state.orders.findIndex((o) => o.id === id);
+      if (i < 0) return fail('委托不存在或已成交');
+      const o = state.orders[i];
+      if (o.side === 'sell') positionOf(portfolio, o.stockIdx).frozen -= o.qty;
+      state.orders.splice(i, 1);
+      return { ok: true };
+    }
+
+    function fail(reason) { return { ok: false, reason }; }
+
+    /** 计算滑点：订单额占当日成交额越大，冲击成本越高。 */
+    function slippage(orderValue, dayAmount) {
+      const c = config.cost;
+      const impact = dayAmount > 0 ? (orderValue / dayAmount) * c.slippageImpact : 0;
+      return Math.min(c.slippageCap, c.slippageBase + impact);
+    }
+
+    /**
+     * 结算第 T 个交易日：撮合当日委托、处理涨跌停封锁、分红、利息，并记录权益。
+     */
+    function settleDay() {
+      const t = state.day;
+      if (t >= market.meta.totalDays) return { ok: false, reason: '已到最后一个交易日' };
+
+      const filled = [];
+      const kept = [];
+
+      // 撤单 / 拒绝 / 失效时都必须释放卖单冻结的股数，否则持仓会被永久锁死
+      const release = (o) => {
+        if (o.side === 'sell') positionOf(portfolio, o.stockIdx).frozen -= o.qty;
+      };
+
+      for (const o of state.orders) {
+        const bar = barOf(o.stockIdx, t);
+        let price = null;
+
+        if (o.type === 'market') {
+          // 涨停买不进、跌停卖不出
+          if (o.side === 'buy' && bar.close >= bar.limitUp) {
+            release(o); filled.push({ order: o, status: 'rejected', reason: '涨停无法买入' }); continue;
+          }
+          if (o.side === 'sell' && bar.close <= bar.limitDown) {
+            release(o); filled.push({ order: o, status: 'rejected', reason: '跌停无法卖出' }); continue;
+          }
+          price = bar.close;
+        } else if (o.side === 'buy') {
+          if (bar.low <= o.limitPrice) price = Math.min(o.limitPrice, bar.open);
+        } else {
+          if (bar.high >= o.limitPrice) price = Math.max(o.limitPrice, bar.open);
+        }
+
+        if (price === null) {
+          o.remainingDays -= 1;
+          if (o.remainingDays > 0) kept.push(o);
+          else {
+            release(o);
+            filled.push({ order: o, status: 'expired', reason: '限价未触发，委托失效' });
+          }
+          continue;
+        }
+
+        const slip = slippage(o.qty * price, bar.amount);
+        const execPrice = round2(o.side === 'buy' ? price * (1 + slip) : price * (1 - slip));
+        let qty = o.qty;
+
+        if (o.side === 'buy') {
+          // 资金不足时按可负担的整手数缩减，而不是直接废单
+          const lot = config.rules.lotSize;
+          const affordable = Math.floor(portfolio.cash / (execPrice * (1 + config.cost.slippageCap) * 1.02) / lot) * lot;
+          if (affordable < lot) { filled.push({ order: o, status: 'rejected', reason: '资金不足' }); continue; }
+          if (affordable < qty) qty = affordable;
+        }
+
+        const value = qty * execPrice;
+        if (o.side === 'buy') {
+          const fees = buyFees(value, config);
+          if (value + fees > portfolio.cash) { filled.push({ order: o, status: 'rejected', reason: '资金不足' }); continue; }
+          portfolio.cash -= value + fees;
+          portfolio.feeTotal += fees;
+          const pos = positionOf(portfolio, o.stockIdx);
+          // 加权平均成本：把费用摊进成本，盈亏计算才真实
+          pos.avgCost = (pos.avgCost * pos.qty + value + fees) / (pos.qty + qty);
+          pos.qty += qty;
+          filled.push({ order: o, status: 'filled', qty, price: execPrice, value, fees, side: 'buy' });
+        } else {
+          const pos = positionOf(portfolio, o.stockIdx);
+          const fees = sellFees(value, config);
+          const realized = (execPrice - pos.avgCost) * qty - fees;
+          portfolio.cash += value - fees;
+          portfolio.feeTotal += fees;
+          pos.qty -= qty;
+          release(o);
+          pos.realized += realized;
+          if (pos.qty === 0) pos.avgCost = 0;
+          portfolio.closedTrades.push({ stockIdx: o.stockIdx, day: t, qty, price: execPrice, realized });
+          filled.push({ order: o, status: 'filled', qty, price: execPrice, value, fees, side: 'sell', realized });
+        }
+        portfolio.trades.push({ day: t, stockIdx: o.stockIdx, side: o.side, qty, price: execPrice, value });
+      }
+
+      state.orders = kept;
+
+      // 分红派现
+      for (const div of market.world.dividends) {
+        if (div.day !== t) continue;
+        const pos = positionOf(portfolio, div.stockIdx);
+        if (pos.qty > 0) {
+          const bar = barOf(div.stockIdx, t);
+          const payout = pos.qty * bar.close * div.yield / (1 - div.yield);
+          portfolio.cash += payout;
+          state.notices.push({
+            kind: 'good',
+            text: `${market.stocks[div.stockIdx].name} 派发现金红利，入账 ${payout.toFixed(2)} 元`,
+          });
+        }
+      }
+
+      // 现金利息（年化 1.5%，按日计提）
+      portfolio.cash += portfolio.cash * (config.rules.cashRate / 252);
+
+      const equity = currentEquity(t);
+      portfolio.equityCurve.push({ day: t, equity, index: market.index[t].close });
+      // 日切放在结算之后：本日买入的股票，从下一个交易日的盘前决策起才可卖出（T+1）
+      startDay(portfolio);
+
+      const result = { ok: true, day: t, filled, notices: state.notices.slice(), equity };
+      state.notices = [];
+      state.day += 1;
+      if (state.day >= market.meta.totalDays) state.finished = true;
+      return result;
+    }
+
+    function currentEquity(t) {
+      let total = portfolio.cash;
+      for (const pos of Object.values(portfolio.positions)) {
+        if (pos.qty <= 0) continue;
+        const bar = barOf(pos.stockIdx, t);
+        total += pos.qty * (bar ? bar.close : 0);
+      }
+      return total;
+    }
+
+    return { state, placeOrder, cancelOrder, settleDay, currentEquity, positionOf };
+  }
+
+  /* ------------------------------------------------------------ 结算与评级 */
+  function computeScore(portfolio, market, config) {
+    const last = market.meta.totalDays - 1;
+    const finalEquity = portfolio.equityCurve.length
+      ? portfolio.equityCurve[portfolio.equityCurve.length - 1].equity
+      : config.rules.initialCash;
+    const totalReturn = finalEquity / config.rules.initialCash - 1;
+    const indexReturn = market.index[last].close / market.index[0].close - 1;
+    const excess = totalReturn - indexReturn;
+
+    let peak = -Infinity, maxDrawdown = 0;
+    for (const p of portfolio.equityCurve) {
+      peak = Math.max(peak, p.equity);
+      if (peak > 0) maxDrawdown = Math.min(maxDrawdown, p.equity / peak - 1);
+    }
+
+    const closed = portfolio.closedTrades;
+    const wins = closed.filter((t) => t.realized > 0).length;
+    const rating = config.rating.find((r) => excess >= r.min);
+
+    return {
+      finalEquity, totalReturn, indexReturn, excess, maxDrawdown,
+      winRate: closed.length ? wins / closed.length : null,
+      tradeCount: portfolio.trades.length,
+      feeTotal: portfolio.feeTotal,
+      title: rating ? rating.title : '—',
+    };
+  }
+
+  /* ------------------------------------------------------------------ 存档 */
+  const SAVE_VERSION = 1;
+
+  function serialize(seed, broker, portfolio) {
+    return {
+      version: SAVE_VERSION,
+      seed,
+      day: broker.state.day,
+      finished: broker.state.finished,
+      cash: portfolio.cash,
+      feeTotal: portfolio.feeTotal,
+      positions: portfolio.positions,
+      orders: broker.state.orders,
+      orderSeq: broker.state.orderSeq,
+      trades: portfolio.trades,
+      closedTrades: portfolio.closedTrades,
+      equityCurve: portfolio.equityCurve,
+      savedAt: new Date().toISOString(),
+    };
+  }
+
+  function deserialize(save) {
+    if (!save || save.version !== SAVE_VERSION) return null;
+    return save;
+  }
+
+  return {
+    CONFIG, INDUSTRIES, SAVE_VERSION,
+    createRng, buildCalendar, generateWorld, simulate,
+    createPortfolio, createBroker, computeScore, positionOf,
+    serialize, deserialize,
+    utils: { clamp, round2, buyFees, sellFees, preHolidayDays },
+  };
+})();
+</script>
+
+<!--__UI__-->
+
+</body>
+</html>

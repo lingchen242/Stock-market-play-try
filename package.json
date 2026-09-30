@@ -5,7 +5,7 @@
   "type": "module",
   "description": "《股市模拟》—— 45 个交易日的 A 股投资模拟小游戏（单文件 HTML 交付，node_modules 管理图表库）",
   "scripts": {
-    "test": "node --test tests/",
+    "test": "node --test",
     "serve": "node server.mjs",
     "start": "node server.mjs"
   },
