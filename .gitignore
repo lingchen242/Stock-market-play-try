@@ -4,3 +4,8 @@ node_modules/
 
 # Electron 打包产物
 dist-electron/
+
+# Neutralino：同步生成的资源目录、下载的二进制、打包产物
+resources/
+bin/
+dist/

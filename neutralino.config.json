@@ -1,0 +1,40 @@
+{
+  "$schema": "https://raw.githubusercontent.com/neutralinojs/neutralinojs/main/schemas/neutralino.config.schema.json",
+  "applicationId": "com.liuchen.stock-sim",
+  "version": "1.0.0",
+  "defaultMode": "window",
+
+  "url": "/index.html",
+  "documentRoot": "/",
+  "enableServer": true,
+
+  "port": 41888,
+  "enableNativeAPI": false,
+  "tokenSecurity": "one-time",
+
+  "modes": {
+    "window": {
+      "title": "股市模拟",
+      "width": 1440,
+      "height": 920,
+      "minWidth": 360,
+      "minHeight": 600,
+      "center": true,
+      "fullScreen": false,
+      "alwaysOnTop": false,
+      "enableInspector": false,
+      "borderless": false,
+      "maximize": false,
+      "resizable": true,
+      "hidden": false,
+      "exitProcessOnClose": true
+    }
+  },
+
+  "cli": {
+    "binaryName": "StockSim",
+    "resourcesPath": "/resources/",
+    "extensionsPath": "/extensions/",
+    "binaryVersion": "6.9.0"
+  }
+}

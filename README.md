@@ -70,6 +70,19 @@ npm run serve      # 打开 http://127.0.0.1:8080/
 - **玩游戏**：任意现代浏览器（Chrome / Edge / Safari 15+ / Firefox），不需要 Node。
 - **跑服务与测试**：Node.js 20.19+ / 22.13+ / 24+（jsdom 的要求）。
 
+### 打包成桌面应用
+
+想把游戏做成一个能拷给别人的 exe：
+
+```bash
+npx neu update              # 一次性下载 Neutralino 运行时，约 8 MB
+npm run neutralino:build    # 产出 dist/StockSim/StockSim-win_x64.exe
+```
+
+产物是**单个自包含 exe，2.62 MB**，双击即玩，目标机器不需要装任何东西。它借用系统自带的 WebView2 渲染，所以不像 Electron 那样要背一个上百 MB 的浏览器内核。
+
+细节、体积构成，以及备选的 Electron 方案（约 70~100 MB）见 [打包桌面版说明](docs/打包桌面版说明.md)。
+
 ## 市场是怎么模拟的
 
 先说结论：**先排好 45 天的新闻，再让价格跟着新闻走**。这样你读到的消息和随后的走势必然自洽，而不是先随机出一堆价格、再事后编几条新闻去解释它。
