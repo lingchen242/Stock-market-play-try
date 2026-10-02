@@ -130,3 +130,124 @@ test('冒烟：限价单会继续挂着，撤单后消失', async () => {
 
   dom.window.close();
 });
+
+/* ------------------------------------------------------------------ 新增逻辑
+ *
+ * 下面三条都用了固定种子 1。这个种子的可复现已核对过：
+ *   股票 0「云岭酿」第 1 日收盘 68.22 < 涨停 74.80，市价买单必然成交；
+ *   消息条数第 1 / 2 日分别为 2 / 1 条。
+ * 用固定种子是为了让断言能写死具体数字，而不是只看"有没有内容"。
+ */
+
+/**
+ * 以固定种子开局，并关掉开局弹层。
+ *
+ * 顺带守一个曾经踩过的坑：弹层的按钮回调是「先 closeModal() 再 onClick()」，
+ * 而 closeModal 会清空 modal-root。种子值必须在弹层关闭前就取到手，
+ * 否则玩家填的种子会被静默丢掉、退回随机种子。存档里的 last-seed 就是证据。
+ */
+function startWithSeed(dom, seed) {
+  const { document, localStorage } = dom.window;
+  document.getElementById('seed-input').value = String(seed);
+  [...document.querySelectorAll('.modal-foot button')]
+    .find((b) => b.textContent.includes('开始新的')).click();
+  assert.equal(localStorage.getItem('stock-sim:last-seed'), String(seed),
+    '弹层里填的随机种子必须真的生效（曾因 closeModal 先清空弹层而静默失效）');
+}
+
+/** 读取账户面板里某一格的显示值；没有这一格时返回 null。 */
+function acctCell(document, label) {
+  const cells = [...document.querySelectorAll('#account-grid .acct-cell')];
+  const cell = cells.find((c) => c.querySelector('.acct-label')?.textContent === label);
+  return cell ? cell.querySelector('.acct-value').textContent : null;
+}
+
+test('冒烟：消息面保留上一天的消息，并做视觉降级', async () => {
+  const dom = await bootDom();
+  const { document } = dom.window;
+  startWithSeed(dom, 1);
+
+  // 第 1 个交易日：只有当天消息，还不该出现「昨日」分隔
+  assert.equal(document.querySelectorAll('#news .news-item').length, 2, '第 1 日应有 2 条当日消息');
+  assert.equal(document.querySelector('#news .news-sep'), null, '第 1 日没有上一天，不该有分隔');
+
+  // 结算 → 进入第 2 个交易日的决策
+  document.getElementById('btn-next').click();
+
+  const sep = document.querySelector('#news .news-sep');
+  assert.ok(sep, '第 2 日应出现「昨日」分隔');
+  assert.match(sep.textContent, /昨日/, '分隔上应标明是昨日');
+
+  // 第 2 日：当日 1 条 + 昨日 2 条 = 3 条
+  assert.equal(document.querySelectorAll('#news .news-item').length, 3,
+    '应同时显示第 2 日的 1 条与第 1 日保留的 2 条');
+  assert.equal(document.querySelectorAll('#news .news-item.is-past').length, 2,
+    '上一天的 2 条应降级显示（is-past）');
+  assert.match(document.getElementById('news-count').textContent, /3 条/);
+
+  // 再推进一天，保留的应该变成第 2 日的那一条，而不是越积越多
+  document.getElementById('btn-next').click();
+  assert.equal(document.querySelectorAll('#news .news-item.is-past').length, 1,
+    '只保留上一天，不应累积所有历史消息');
+
+  dom.window.close();
+});
+
+test('冒烟：买入挂单后可用现金立即减少，并出现「挂单冻结」', async () => {
+  const dom = await bootDom();
+  const { document } = dom.window;
+  startWithSeed(dom, 1);
+
+  const before = acctCell(document, '可用现金');
+  assert.ok(before, '账户面板应显示可用现金');
+  assert.equal(acctCell(document, '挂单冻结'), null, '没有挂单时不该显示冻结格');
+
+  document.getElementById('trade-qty').value = '200';
+  document.getElementById('btn-buy').click();
+
+  // 关键：此刻还没有结算，价格也没成交，但可用现金已经变了
+  assert.notEqual(acctCell(document, '可用现金'), before, '下单后可用现金应立即变化');
+  assert.ok(acctCell(document, '挂单冻结'), '下单后应出现「挂单冻结」一格');
+
+  // 撤单后应当完全恢复
+  document.querySelector('button[data-cancel]').click();
+  assert.equal(acctCell(document, '可用现金'), before, '撤单后可用现金应完全恢复');
+  assert.equal(acctCell(document, '挂单冻结'), null, '撤单后不应再有冻结格');
+
+  dom.window.close();
+});
+
+test('冒烟：有持仓时快捷数量按持仓算，可以一键卖出', async () => {
+  const dom = await bootDom();
+  const { document } = dom.window;
+  startWithSeed(dom, 1);
+
+  const preset = (label) => [...document.querySelectorAll('#qty-presets button')]
+    .find((b) => b.textContent === label);
+  const qtyValue = () => document.getElementById('trade-qty').value;
+
+  // 无持仓：全仓按可用现金算（10 万本金对 68 元的股票，远不止 200 股）
+  preset('全仓').click();
+  assert.ok(Number(qtyValue()) > 1000, `无持仓时「全仓」应按可用现金算，实际得到 ${qtyValue()}`);
+  assert.match(document.getElementById('qty-estimate').textContent, /按可用现金算/);
+
+  // 买入 200 股并结算，拿到可卖持仓（T+1）
+  document.getElementById('trade-qty').value = '200';
+  document.getElementById('btn-buy').click();
+  document.getElementById('btn-next').click();
+
+  // 有持仓：全仓 = 全部可卖，半仓 = 可卖的一半
+  preset('全仓').click();
+  assert.equal(qtyValue(), '200', '有持仓时「全仓」应等于全部可卖持仓');
+  assert.match(document.getElementById('qty-estimate').textContent, /按持仓算/);
+
+  preset('半仓').click();
+  assert.equal(qtyValue(), '100', '「半仓」应为可卖持仓的一半');
+
+  // 而且这笔卖单真的能挂出去
+  preset('全仓').click();
+  document.getElementById('btn-sell').click();
+  assert.ok(document.querySelector('#orders tbody tr'), '卖单应挂上委托列表');
+
+  dom.window.close();
+});

@@ -372,6 +372,108 @@ test('撤单：卖单撤销后冻结股数立即释放', () => {
   assert.equal(Core.positionOf(portfolio, 0).qty, LOT, '撤单不应改变持仓数量');
 });
 
+/* ---------------------------------------------------------------- 资金冻结 */
+
+test('资金冻结：买单挂上后可用现金立即减少，撤单后全额恢复', () => {
+  const market = syntheticMarket([
+    { open: 10, high: 10, low: 10, close: 10 },
+    { open: 10, high: 10, low: 10, close: 10 },
+  ]);
+  const { portfolio, broker } = newBroker(market);
+
+  const before = broker.availableCash();
+  assert.equal(before, portfolio.cash, '没有挂单时可用现金等于账面现金');
+  assert.equal(broker.frozenCash(), 0, '没有挂单时不应有冻结');
+
+  const res = broker.placeOrder({ stockIdx: 0, side: 'buy', type: 'market', qty: LOT });
+  assert.equal(res.ok, true);
+  const frozen = broker.frozenCash();
+  assert.ok(frozen > 0, '买单挂上后应产生冻结');
+
+  // 账面现金不动（钱还是玩家的），但可用现金立刻变小 —— 这就是"下单即更新"
+  assert.equal(portfolio.cash, before, '冻结不应改变账面现金');
+  assert.ok(broker.availableCash() < before, '可用现金应立刻减少');
+  assert.ok(Math.abs(broker.availableCash() - (before - frozen)) < 1e-9, '可用现金 = 现金 − 冻结');
+
+  assert.equal(broker.cancelOrder(res.order.id).ok, true);
+  assert.equal(broker.frozenCash(), 0, '撤单后冻结应归零');
+  assert.equal(broker.availableCash(), before, '撤单后可用现金应完全恢复');
+});
+
+test('资金冻结：挡掉超额挂单，而不是等到结算才失败', () => {
+  const market = syntheticMarket([
+    { open: 10, high: 10, low: 10, close: 10 },
+    { open: 10, high: 10, low: 10, close: 10 },
+  ]);
+  // 1200 元刚好够买 100 股（含缓冲），一笔就把额度占满
+  const { broker } = newBroker(market, 1200);
+  const all = LOT;
+
+  assert.equal(broker.placeOrder({ stockIdx: 0, side: 'buy', type: 'market', qty: all }).ok, true);
+
+  // 第二笔必须当场被拒。否则玩家能连挂多笔"全仓"，结算时只有一笔有钱成交，
+  // 剩下的变成"资金不足"，看起来就像 bug。
+  const second = broker.placeOrder({ stockIdx: 0, side: 'buy', type: 'market', qty: all });
+  assert.equal(second.ok, false, '冻结后不足以支付的买单应被直接拒绝');
+  assert.match(second.reason, /可用资金不足/);
+});
+
+test('资金冻结：买单成交后冻结归零，实际扣款不超过预估值', () => {
+  const market = syntheticMarket([
+    { open: 10, high: 10, low: 10, close: 10 },
+    { open: 10, high: 10, low: 10, close: 10 },
+  ]);
+  const { portfolio, broker } = newBroker(market);
+
+  broker.placeOrder({ stockIdx: 0, side: 'buy', type: 'market', qty: LOT });
+  const frozenBefore = broker.frozenCash();
+  assert.ok(frozenBefore > 0);
+
+  const res = broker.settleDay();
+  const fill = res.filled.find((f) => f.status === 'filled');
+  assert.ok(fill, '买单应成交');
+  assert.equal(broker.frozenCash(), 0, '成交后不应再有冻结');
+  // 预算是按"滑点上限 + 1% 缓冲"估的，实际扣款必然不超过它
+  assert.ok(fill.value + fill.fees <= frozenBefore + 1e-6,
+    `实际扣款 ${fill.value + fill.fees} 不应超过预估值 ${frozenBefore}`);
+  assert.equal(broker.availableCash(), portfolio.cash, '冻结归零后可用现金回到账面现金');
+});
+
+test('资金冻结：限价失效与涨停拒单都不得永久占住资金', () => {
+  // 限价 1 元不可能触发 → 当日有效，结算即失效，冻结必须退回
+  const expired = newBroker(syntheticMarket([
+    { open: 10, high: 10.5, low: 9.5, close: 10 },
+    { open: 10, high: 10.2, low: 9.8, close: 10 },
+  ]));
+  expired.broker.placeOrder({ stockIdx: 0, side: 'buy', type: 'limit', qty: LOT, limitPrice: 1, validity: 1 });
+  assert.ok(expired.broker.frozenCash() > 0, '挂单期间应有冻结');
+  expired.broker.settleDay();
+  assert.equal(expired.broker.frozenCash(), 0, '限价失效后冻结必须释放');
+  assert.equal(expired.broker.availableCash(), expired.portfolio.cash, '可用现金应完全恢复');
+
+  // 涨停买不进：被拒后同样要释放
+  const limited = newBroker(syntheticMarket([
+    { open: 10, high: 10, low: 10, close: 10 },
+    { open: 11, high: 11, low: 11, close: 11 },   // 第 1 日一字涨停
+  ]));
+  limited.broker.settleDay();
+  limited.broker.placeOrder({ stockIdx: 0, side: 'buy', type: 'market', qty: LOT });
+  assert.ok(limited.broker.frozenCash() > 0);
+  limited.broker.settleDay();
+  assert.equal(limited.broker.frozenCash(), 0, '涨停拒单后冻结必须释放');
+
+  // 3 日有效的限价单一直没触发：冻结要一直占着，不能提前放掉
+  const pending = newBroker(syntheticMarket([
+    { open: 10, high: 10.5, low: 9.5, close: 10 },
+    { open: 10, high: 10.5, low: 9.5, close: 10 },
+    { open: 10, high: 10.5, low: 9.5, close: 10 },
+  ]));
+  pending.broker.placeOrder({ stockIdx: 0, side: 'buy', type: 'limit', qty: LOT, limitPrice: 1, validity: 3 });
+  const held = pending.broker.frozenCash();
+  pending.broker.settleDay();
+  assert.equal(pending.broker.frozenCash(), held, '委托还挂着，冻结就应保持');
+});
+
 /* ------------------------------------------------------- 分红 / 存档 / 评分 */
 
 test('现金分红：除息日按持股数派现，且价格相应下调', () => {

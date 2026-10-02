@@ -312,6 +312,14 @@ table.grid tbody tr:last-child td { border-bottom: 0; }
 .news-tag.good { border-color: var(--up); color: var(--up); }
 .news-text { font-size: var(--fs-md); line-height: 1.55; max-width: 62ch; }
 .news-text .sym { font-weight: 700; }
+/* 上一天的消息保留显示，但做视觉降级：变淡 + 一条「昨日」分隔 */
+.news-item.is-past { opacity: .62; }
+.news-item.is-past:hover { opacity: 1; }
+.news-sep {
+  padding: 5px var(--space-3); font-size: var(--fs-xs); color: var(--text-faint);
+  background: var(--bg-sunken); border-bottom: 1px solid var(--line-soft);
+  position: sticky; top: 0; z-index: 1;
+}
 
 .emo-bar { height: 10px; border-radius: 999px; background: var(--bg-sunken); overflow: hidden; border: 1px solid var(--line-soft); }
 /* 这一处渐变是有语义的：横向就是"恐惧 → 贪婪"这根轴 */
@@ -1204,7 +1212,32 @@ window.GameCore = (function () {
 
     function barOf(stockIdx, day) { return market.stocks[stockIdx].days[day]; }
 
-    /** 下单：只会挂到当日结算时撮合，玩家看不到当日价格。 */
+    /**
+     * 挂单冻结资金：全部未成交买单的预估金额之和。
+     *
+     * 刻意「由挂单推导」而不是单独维护一个标量：撤单、成交、失效三条路径
+     * 都要记得释放，漏一条就会永久占住资金；推导出来则天然不会漏，
+     * 也不会因反复加减产生浮点漂移，存档格式还不用动。
+     * 旧存档里的买单没有 frozenCash 字段，按 0 兜底（结算时仍按真实资金校验）。
+     */
+    function frozenCash() {
+      let sum = 0;
+      for (const o of state.orders) if (o.side === 'buy') sum += o.frozenCash ?? 0;
+      return sum;
+    }
+
+    /** 可用现金 = 账户现金 − 挂单冻结。下单时该看的是这个，而不是账面现金。 */
+    function availableCash() {
+      return Math.max(0, portfolio.cash - frozenCash());
+    }
+
+    /**
+     * 下单：只会挂到当日结算时撮合，玩家看不到当日价格。
+     *
+     * 买单在下单时就按昨收价冻结一笔预估资金（贴近期货之外的国内券商做法），
+     * 于是「可用现金」在下单瞬间就变小 —— 也挡掉了「连着挂三笔全仓买单、
+     * 结算时只有一笔有钱成交」这种超额挂单。
+     */
     function placeOrder(req) {
       if (state.finished) return fail('本局已结束');
       const s = market.stocks[req.stockIdx];
@@ -1220,9 +1253,15 @@ window.GameCore = (function () {
         if (!(req.limitPrice > 0)) return fail('限价必须大于 0');
       }
 
+      let frozen = 0;
       if (req.side === 'buy') {
+        // 预估按最坏成本算：滑点上限 + 1% 缓冲
         const est = qty * refPrice * (1 + config.cost.slippageCap + 0.01);
-        if (est > portfolio.cash) return fail('可用资金不足（按昨收价估算）');
+        const avail = availableCash();
+        if (est > avail) {
+          return fail(`可用资金不足：可用 ${round2(avail)} 元（已扣除挂单冻结，按昨收价估算）`);
+        }
+        frozen = est;
       } else {
         const pos = positionOf(portfolio, req.stockIdx);
         if (qty > pos.available) {
@@ -1242,6 +1281,7 @@ window.GameCore = (function () {
         remainingDays: req.type === 'limit'
           ? clamp(Number(req.validity) || 1, config.rules.limitOrderValidity[0], config.rules.limitOrderValidity[1])
           : 1,
+        frozenCash: frozen,   // 买单占用的预估资金；卖单恒为 0
       };
       state.orders.push(order);
       return { ok: true, order };
@@ -1390,7 +1430,7 @@ window.GameCore = (function () {
       return total;
     }
 
-    return { state, placeOrder, cancelOrder, settleDay, currentEquity, positionOf };
+    return { state, placeOrder, cancelOrder, settleDay, currentEquity, positionOf, availableCash, frozenCash };
   }
 
   /* ------------------------------------------------------------ 结算与评级 */
@@ -1536,7 +1576,17 @@ window.GameCore = (function () {
       const btn = document.createElement('button');
       btn.className = `btn ${a.primary ? 'btn-primary' : ''}`;
       btn.textContent = a.label;
-      btn.addEventListener('click', () => { closeModal(); a.onClick?.(); });
+      btn.addEventListener('click', () => {
+        // 弹层里的输入值必须在关闭之前取出：closeModal 会把 modal-root 整个清空，
+        // 关掉之后再 getElementById 只能拿到 null。开局弹层的随机种子曾经就是这么
+        // 被静默丢掉的 —— 玩家填了种子，实际仍走随机开局。
+        const fields = {};
+        for (const field of root.querySelectorAll('input, select')) {
+          if (field.id) fields[field.id] = field.value;
+        }
+        closeModal();
+        a.onClick?.(fields);
+      });
       foot.appendChild(btn);
     }
   }
@@ -1783,10 +1833,17 @@ window.GameCore = (function () {
     const floatPnl = marketValue - costValue;
     const totalPnl = equity - CONFIG.rules.initialCash;
 
+    // 可用现金要扣掉挂单冻结；冻结非零时单列一格，让「下单即扣」看得见
+    const frozen = App.broker.frozenCash();
+    const frozenCell = frozen > 0.005
+      ? `<div class="acct-cell"><span class="acct-label">挂单冻结</span><span class="acct-value" style="color:var(--text-dim)">${money(frozen)}</span></div>`
+      : '';
+
     el('account-grid').innerHTML = `
       <div class="acct-cell wide"><span class="acct-label">总资产</span><span class="acct-value big ${tone(totalPnl)}">${money(equity)}</span></div>
       <div class="acct-cell"><span class="acct-label">累计收益</span><span class="acct-value ${tone(totalPnl)}">${signed(totalPnl)} (${pct(totalPnl / CONFIG.rules.initialCash)})</span></div>
-      <div class="acct-cell"><span class="acct-label">可用现金</span><span class="acct-value">${money(App.portfolio.cash)}</span></div>
+      <div class="acct-cell"><span class="acct-label">可用现金</span><span class="acct-value">${money(App.broker.availableCash())}</span></div>
+      ${frozenCell}
       <div class="acct-cell"><span class="acct-label">持仓市值</span><span class="acct-value">${money(marketValue)}</span></div>
       <div class="acct-cell"><span class="acct-label">持仓浮盈</span><span class="acct-value ${tone(floatPnl)}">${signed(floatPnl)}</span></div>
       <div class="acct-cell"><span class="acct-label">累计费用</span><span class="acct-value" style="color:var(--text-dim)">${money(App.portfolio.feeTotal)}</span></div>`;
@@ -1872,24 +1929,33 @@ window.GameCore = (function () {
     }
   }
 
+  /**
+   * 快捷数量的判断口径：选中标的还有可卖的股票就按持仓算（卖出），
+   * 否则按可用现金算（买入）。没有加方向切换控件，靠这一条自动判别。
+   */
+  const presetMode = (pos) => (pos.available > 0 ? 'holding' : 'cash');
+
   function renderTrade() {
     const s = stock(App.selected);
     const price = refPrice(App.selected);
     const pos = Core.positionOf(App.portfolio, App.selected);
     el('trade-hint').textContent = `参考价 ${fmt(price)}（${lastBar(App.selected) ? '昨收' : '发行价'}）`;
 
+    // 把快捷数量的口径明写出来，免得玩家点了「全仓」才发现算的是卖出
+    const presetNote = presetMode(pos) === 'holding'
+      ? `可卖 ${pos.available} 股；快捷数量按持仓算`
+      : `可用 ${money(App.broker.availableCash())} 元；快捷数量按可用现金算`;
+
     const qty = Number(el('trade-qty').value) || 0;
     if (App.orderType === 'market') {
       const est = qty * price;
       const fee = Core.utils.buyFees(est, CONFIG);
       el('qty-estimate').textContent = qty > 0
-        ? `预计金额 ≈ ${money(est)} 元（含费用约 ${fmt(fee)} 元）；可卖 ${pos.available} 股`
-        : `可卖 ${pos.available} 股`;
+        ? `预计金额 ≈ ${money(est)} 元（含费用约 ${fmt(fee)} 元）；${presetNote}`
+        : presetNote;
     } else {
       const lp = Number(el('trade-limit').value) || 0;
-      el('qty-estimate').textContent = lp > 0
-        ? `限价 ${fmt(lp)}，触及才成交；可卖 ${pos.available} 股`
-        : `可卖 ${pos.available} 股`;
+      el('qty-estimate').textContent = lp > 0 ? `限价 ${fmt(lp)}，触及才成交；${presetNote}` : presetNote;
     }
   }
 
@@ -1916,15 +1982,26 @@ window.GameCore = (function () {
       <tbody>${rows}</tbody></table>`;
   }
 
+  /**
+   * 消息面：当天 + 上一天。
+   *
+   * 只显示当天会丢线索：前一天的公告往往正是当天走势的解释，而玩家读完
+   * 昨天的消息、点了结算，再回来看就没了。所以把上一天保留下来，
+   * 用变淡 + 一条「昨日」分隔做视觉降级，当天的仍是主角。
+   */
   function renderNews() {
     const day = decisionDay();
     const items = App.market.news[day] ?? [];
-    el('news-count').textContent = items.length ? `${items.length} 条` : '暂无';
-    if (!items.length) {
+    const past = day > 0 ? (App.market.news[day - 1] ?? []) : [];
+    const total = items.length + past.length;
+    el('news-count').textContent = total ? `${total} 条` : '暂无';
+
+    if (!total) {
       el('news').innerHTML = '<div class="empty">今天盘前没有新消息。</div>';
       return;
     }
-    el('news').innerHTML = items.map((n) => {
+
+    const block = (list, isPast) => list.map((n) => {
       const tagKind = n.rumor ? 'rumor' : n.tone === 'bad' ? 'bad' : n.tone === 'good' ? 'good' : '';
       const tagText = n.rumor ? '传闻' : n.scope === 'market' ? '宏观' : n.scope === 'industry' ? '行业' : n.scope === 'stock' ? '公司' : '快讯';
       let text = escapeHtml(n.headline);
@@ -1932,11 +2009,19 @@ window.GameCore = (function () {
         const name = escapeHtml(stock(n.stockIdx).name);
         text = text.replace(name, `<span class="sym">${name}</span>`);
       }
-      return `<div class="news-item">
+      return `<div class="news-item${isPast ? ' is-past' : ''}">
         <div class="news-tags"><span class="news-tag ${tagKind}">${tagText}</span></div>
         <div class="news-text">${text}</div>
       </div>`;
     }).join('');
+
+    let html = items.length ? block(items, false) : '<div class="empty">今天盘前没有新消息。</div>';
+    if (past.length) {
+      const label = App.market.calendar?.[day - 1]?.label ?? '';
+      html += `<div class="news-sep">昨日 · ${escapeHtml(label)}（保留）</div>`;
+      html += block(past, true);
+    }
+    el('news').innerHTML = html;
   }
 
   function renderEmotion() {
@@ -2038,8 +2123,9 @@ window.GameCore = (function () {
       actions: [
         { label: '读取上次存档', onClick: () => { if (!restore()) { toast('没有可用的存档', 'bad'); showIntro(); } else renderAll(); } },
         {
-          label: '开始新的 45 天', primary: true, onClick: () => {
-            const v = Number(document.getElementById('seed-input')?.value);
+          label: '开始新的 45 天', primary: true, onClick: (fields) => {
+            // 种子由 modal 在关闭弹层前取出并传进来（见 modal 内的说明）
+            const v = Number(fields['seed-input']);
             newGame(Number.isFinite(v) && v > 0 ? v : Math.floor(Math.random() * 1e8));
             toast('开局成功，先读消息面再动手', 'good');
           },
@@ -2154,15 +2240,33 @@ window.GameCore = (function () {
       renderTrade();
     });
 
+    /**
+     * 快捷数量：按选中标的的持仓自动判方向。
+     *   有可卖持仓 → 按持仓算（半仓 = 可卖的一半，全仓 = 全部可卖）
+     *   没有持仓   → 按可用现金算（半仓 = 一半可用现金能买多少，全仓 = 全买）
+     * 这样卖出时也能用快捷数量，不必自己数持仓股数。
+     */
     el('qty-presets').addEventListener('click', (e) => {
       const btn = e.target.closest('button[data-qty]');
       if (!btn) return;
       const price = refPrice(App.selected);
       const lot = CONFIG.rules.lotSize;
+      const pos = Core.positionOf(App.portfolio, App.selected);
+      const holding = presetMode(pos) === 'holding';
+      const avail = App.broker.availableCash();
+
       let qty;
-      if (btn.dataset.qty === 'hf') qty = Math.floor((App.portfolio.cash / 2) / price / lot) * lot;
-      else if (btn.dataset.qty === 'all') qty = Math.floor(App.portfolio.cash / (price * 1.01) / lot) * lot;
-      else qty = Number(btn.dataset.qty);
+      if (btn.dataset.qty === 'hf') {
+        qty = holding
+          ? Math.floor((pos.available / 2) / lot) * lot
+          : Math.floor((avail / 2) / price / lot) * lot;
+      } else if (btn.dataset.qty === 'all') {
+        qty = holding
+          ? Math.floor(pos.available / lot) * lot
+          : Math.floor(avail / (price * 1.01) / lot) * lot;
+      } else {
+        qty = Number(btn.dataset.qty);
+      }
       el('trade-qty').value = Math.max(lot, qty || lot);
       renderTrade();
     });
