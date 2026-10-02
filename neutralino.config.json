@@ -4,13 +4,18 @@
   "version": "1.0.0",
   "defaultMode": "window",
 
-  "url": "/index.html",
-  "documentRoot": "/",
+  "documentRoot": "/resources/",
+  "url": "/",
   "enableServer": true,
 
   "port": 41888,
   "enableNativeAPI": false,
   "tokenSecurity": "one-time",
+
+  "logging": {
+    "enabled": true,
+    "writeToLogFile": true
+  },
 
   "modes": {
     "window": {
