@@ -12,7 +12,9 @@
     "start": "node web/server.mjs",
     "neutralino:prepare": "node desktop/neutralino/prepare-resources.mjs",
     "neutralino:build": "node desktop/neutralino/prepare-resources.mjs && cd desktop && neu build --release --embed-resources --clean && cd .. && node desktop/neutralino/prune-dist.mjs",
-    "neutralino:run": "node desktop/neutralino/prepare-resources.mjs && cd desktop && neu run"
+    "neutralino:run": "node desktop/neutralino/prepare-resources.mjs && cd desktop && neu run",
+    "portable:pack": "node desktop/neutralino/pack-portable.mjs",
+    "portable": "npm run neutralino:build && npm run portable:pack"
   },
   "dependencies": {
     "lightweight-charts": "4.2.3"

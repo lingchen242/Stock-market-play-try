@@ -165,3 +165,60 @@ test('端到端：打包后的 exe 必须真的能通过 HTTP 提供游戏页面
     child.kill();
   }
 });
+
+/* ------------------------------------------------------------------ 便携包
+ *
+ * 发给别人这条路上有三处容易翻车，各守一条：
+ *   1. ZIP 容器结构不合法 —— 容器是手写的，这是最可能出错的地方；
+ *   2. 中文文件名没带 UTF-8 标志位 —— 在别的解压软件里会变成乱码；
+ *   3. 使用说明漏了退路 —— 对方电脑缺 WebView2 时会直接卡住，无从下手。
+ */
+
+const pkgInfo = JSON.parse(read('package.json'));
+const EXE = join(ROOT, 'desktop', 'dist', 'StockSim', 'StockSim-win_x64.exe');
+const PORTABLE_ZIP = join(ROOT, 'desktop', 'release', `股市模拟-${pkgInfo.version}-便携版.zip`);
+
+test('便携包：脚本与 npm 入口齐备，产物目录已忽略', () => {
+  assert.ok(existsSync(join(ROOT, 'desktop/neutralino/pack-portable.mjs')), '缺少便携包打包脚本');
+  assert.ok(pkgInfo.scripts['portable:pack'], '缺少脚本 portable:pack');
+  assert.ok(pkgInfo.scripts.portable, '缺少脚本 portable（构建 + 打包一条龙）');
+  assert.match(read('.gitignore'), /desktop\/release\//, '便携包产物不应进入版本控制');
+});
+
+test('便携包：使用说明必须给出两条退路', () => {
+  // 说明文本是脚本内联生成的，所以直接查源码
+  const src = read('desktop/neutralino/pack-portable.mjs');
+  for (const needle of ['WebView2', 'go.microsoft.com', 'SmartScreen', '更多信息', '股市模拟.html']) {
+    assert.ok(src.includes(needle), `使用说明里缺少关键内容：${needle}`);
+  }
+});
+
+test('便携包：exe 已构建时，产出的 ZIP 结构合法且条目齐全', async () => {
+  if (!existsSync(EXE)) return;   // 还没构建过，跳过；这不是配置错误
+
+  // 直接 import 调用，不起子进程：一来不必依赖 spawn（沙箱里可能被拦），
+  // 二来这样 ZIP 写入器本身也成了可测的纯函数
+  const { packPortable } = await import('../desktop/neutralino/pack-portable.mjs');
+  const { output } = packPortable();
+  assert.equal(output, PORTABLE_ZIP, '产物路径应与按版本号推出的路径一致');
+
+  const zip = readFileSync(output);
+  assert.equal(zip.readUInt32LE(0), 0x04034b50, 'ZIP 应以本地文件头签名开头');
+
+  // 中央目录结束记录：任何正经解压软件都从这里开始读目录
+  const eocd = zip.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06]));
+  assert.ok(eocd > 0, 'ZIP 缺少中央目录结束记录，不是合法压缩包');
+  assert.equal(zip.readUInt16LE(eocd + 10), 3, 'ZIP 应恰好含 3 个条目');
+
+  // 目录偏移指错了，等于目录读不到，解压软件会报"压缩包已损坏"
+  const centralOffset = zip.readUInt32LE(eocd + 16);
+  const centralSize = zip.readUInt32LE(eocd + 12);
+  assert.equal(centralOffset + centralSize, eocd, '中央目录的偏移与长度对不上 EOCD 的位置');
+
+  for (const name of ['股市模拟.exe', '股市模拟.html', '使用说明.txt']) {
+    assert.ok(zip.includes(Buffer.from(name, 'utf8')), `ZIP 里缺少条目：${name}`);
+  }
+
+  // 中文名必须带 UTF-8 标志位（通用标志位第 11 位），否则别的解压软件会乱码
+  assert.equal(zip.readUInt16LE(6), 0x0800, '本地文件头应设置 UTF-8 文件名标志位');
+});

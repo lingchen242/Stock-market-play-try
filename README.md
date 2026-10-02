@@ -81,6 +81,22 @@ npm run neutralino:build    # 产出 desktop/dist/StockSim/StockSim-win_x64.exe
 
 产物是**单个自包含 exe，2.62 MB**，双击即玩，目标机器不需要装任何东西。它借用系统自带的 WebView2 渲染，不需要背一个上百 MB 的浏览器内核。
 
+### 打包成能发给别人的便携包
+
+```bash
+npm run portable            # 构建 + 打包一条龙
+```
+
+产出 `desktop/release/股市模拟-1.0.0-便携版.zip`（1.25 MB）。解开是一个文件夹：
+
+| 文件 | 作用 |
+| --- | --- |
+| `股市模拟.exe` | 桌面版，双击即玩 |
+| `股市模拟.html` | 兜底：拖进任何浏览器也能玩，不需要 WebView2 |
+| `使用说明.txt` | 怎么开始，以及 WebView2 缺失、SmartScreen 提示怎么过 |
+
+同时放 exe 和 HTML 是刻意的：exe 依赖系统自带的 WebView2，而**从没装过 Edge 的老 Windows 10 可能没有**。带上零依赖的 HTML，收到包的人不管电脑什么状态都有路可走。
+
 细节与体积构成见 [打包桌面版说明](docs/打包桌面版说明.md)；`desktop/` 这一层目录的分工见 [desktop/README.md](desktop/README.md)。
 
 ## 市场是怎么模拟的
@@ -105,13 +121,13 @@ npm run neutralino:build    # 产出 desktop/dist/StockSim/StockSim-win_x64.exe
 npm test
 ```
 
-44 个用例。游戏本体分三层：
+47 个用例。游戏本体分三层：
 
 - **内核**（22 个）：种子完全可复现、OHLC 不变量与价格下界、涨跌停按板块生效、T+1 冻结与释放、佣金最低 5 元、限价单触发与失效、跌停卖不出时冻结必须释放、分红派息、存档往返，以及跨 45 天随机交易不产生 NaN、负现金或持仓错乱。
 - **界面静态一致性**（6 个）：脚本语法可解析、界面脚本引用的每个元素 id 都真实存在、无外部样式表与图片、三级图表加载链齐备、响应式与减弱动效声明、存档键带版本号。
 - **真实 DOM 冒烟**（3 个，jsdom）：首屏渲染出全部 30 只标的、完整走通「下单 → 收盘结算 → 推进到第 2 日 → 写入存档」、限价单挂单与撤单。
 
-另有 **打包与文档**（13 个）：README 与打包说明里引用的本地文件都必须真实存在（4），以及 Neutralino 的配置一致性，外加「把打包好的 exe 真的启动起来、用 HTTP 取回首页」的端到端验证（9）。
+另有 **打包与文档**（16 个）：README 与打包说明里引用的本地文件都必须真实存在（4），Neutralino 的配置一致性，外加「把打包好的 exe 真的启动起来、用 HTTP 取回首页」的端到端验证（9），以及便携包的 ZIP 结构与退路说明校验（3）。
 
 内核测试的做法值得说明：交付物是单文件 HTML，所以测试**从 HTML 中抽取 `<script id="game-core">` 的源码**，用 `node:vm` 在沙箱里执行后再断言。单文件的交付形态没有变，逻辑却完全可测。
 
@@ -126,10 +142,11 @@ web/                        网页项目
 desktop/                    桌面打包（Neutralino）
   README.md                 这一层目录的分工说明
   neutralino.config.json    Neutralino 配置
-  neutralino/               资源同步与产物清理脚本
+  neutralino/               资源同步、产物清理与便携包打包脚本
   bin/                      （生成物）Neutralino 各平台运行时
   resources/                （生成物）从 web/ 同步出来的网页资源
   dist/                     （生成物）打包产物
+  release/                  （生成物）可发给别人的便携包 ZIP
 docs/
   股市模拟-设计文档.md        市场模拟的完整设计
   打包桌面版说明.md           把游戏做成 exe 的两条路子
@@ -139,7 +156,7 @@ tests/
   ui.test.mjs               界面静态一致性（6）
   smoke.test.mjs            jsdom 真实 DOM 冒烟（3）
   docs.test.mjs             文档链接一致性（4）
-  neutralino.test.mjs       Neutralino 配置一致性 + 端到端（9）
+  neutralino.test.mjs       Neutralino 配置一致性 + 端到端 + 便携包（12）
 package.json                依赖与脚本
 AGENTS.md                   本仓库的协作约定
 ```
