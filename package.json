@@ -4,16 +4,12 @@
   "private": true,
   "type": "module",
   "description": "《股市模拟》—— 45 个交易日的 A 股投资模拟小游戏（单文件 HTML 交付）",
-  "main": "desktop/electron/main.cjs",
   "scripts": {
     "postinstall": "node web/prepare-vendor.mjs",
     "test": "node --test",
     "web:prepare": "node web/prepare-vendor.mjs",
     "serve": "node web/server.mjs",
     "start": "node web/server.mjs",
-    "electron:setup": "powershell -NoProfile -ExecutionPolicy Bypass -File desktop/electron/setup.ps1",
-    "electron:dev": "electron .",
-    "electron:build": "powershell -NoProfile -ExecutionPolicy Bypass -File desktop/electron/build.ps1",
     "neutralino:prepare": "node desktop/neutralino/prepare-resources.mjs",
     "neutralino:build": "node desktop/neutralino/prepare-resources.mjs && cd desktop && neu build --release --embed-resources --clean && cd .. && node desktop/neutralino/prune-dist.mjs",
     "neutralino:run": "node desktop/neutralino/prepare-resources.mjs && cd desktop && neu run"

@@ -79,9 +79,9 @@ npx neu update              # 一次性下载 Neutralino 运行时，约 8 MB
 npm run neutralino:build    # 产出 desktop/dist/StockSim/StockSim-win_x64.exe
 ```
 
-产物是**单个自包含 exe，2.62 MB**，双击即玩，目标机器不需要装任何东西。它借用系统自带的 WebView2 渲染，所以不像 Electron 那样要背一个上百 MB 的浏览器内核。
+产物是**单个自包含 exe，2.62 MB**，双击即玩，目标机器不需要装任何东西。它借用系统自带的 WebView2 渲染，不需要背一个上百 MB 的浏览器内核。
 
-细节、体积构成，以及备选的 Electron 方案（约 70~100 MB）见 [打包桌面版说明](docs/打包桌面版说明.md)。
+细节与体积构成见 [打包桌面版说明](docs/打包桌面版说明.md)；`desktop/` 这一层目录的分工见 [desktop/README.md](desktop/README.md)。
 
 ## 市场是怎么模拟的
 
@@ -105,11 +105,13 @@ npm run neutralino:build    # 产出 desktop/dist/StockSim/StockSim-win_x64.exe
 npm test
 ```
 
-31 个用例，分三层：
+44 个用例。游戏本体分三层：
 
 - **内核**（22 个）：种子完全可复现、OHLC 不变量与价格下界、涨跌停按板块生效、T+1 冻结与释放、佣金最低 5 元、限价单触发与失效、跌停卖不出时冻结必须释放、分红派息、存档往返，以及跨 45 天随机交易不产生 NaN、负现金或持仓错乱。
 - **界面静态一致性**（6 个）：脚本语法可解析、界面脚本引用的每个元素 id 都真实存在、无外部样式表与图片、三级图表加载链齐备、响应式与减弱动效声明、存档键带版本号。
 - **真实 DOM 冒烟**（3 个，jsdom）：首屏渲染出全部 30 只标的、完整走通「下单 → 收盘结算 → 推进到第 2 日 → 写入存档」、限价单挂单与撤单。
+
+另有 **打包与文档**（13 个）：README 与打包说明里引用的本地文件都必须真实存在（4），以及 Neutralino 的配置一致性，外加「把打包好的 exe 真的启动起来、用 HTTP 取回首页」的端到端验证（9）。
 
 内核测试的做法值得说明：交付物是单文件 HTML，所以测试**从 HTML 中抽取 `<script id="game-core">` 的源码**，用 `node:vm` 在沙箱里执行后再断言。单文件的交付形态没有变，逻辑却完全可测。
 
@@ -121,11 +123,13 @@ web/                        网页项目
   server.mjs                零依赖静态预览服务器（node:http）
   prepare-vendor.mjs        把图表库同步到 vendor/
   vendor/                   （生成物）本地图表库
-desktop/                    桌面打包
-  electron/                 Electron 主进程与构建脚本
-  electron-builder.yml      Electron 打包配置
-  neutralino/               Neutralino 资源同步与产物清理
+desktop/                    桌面打包（Neutralino）
+  README.md                 这一层目录的分工说明
   neutralino.config.json    Neutralino 配置
+  neutralino/               资源同步与产物清理脚本
+  bin/                      （生成物）Neutralino 各平台运行时
+  resources/                （生成物）从 web/ 同步出来的网页资源
+  dist/                     （生成物）打包产物
 docs/
   股市模拟-设计文档.md        市场模拟的完整设计
   打包桌面版说明.md           把游戏做成 exe 的两条路子
@@ -135,7 +139,6 @@ tests/
   ui.test.mjs               界面静态一致性（6）
   smoke.test.mjs            jsdom 真实 DOM 冒烟（3）
   docs.test.mjs             文档链接一致性（4）
-  electron.test.mjs         Electron 配置一致性（8）
   neutralino.test.mjs       Neutralino 配置一致性 + 端到端（9）
 package.json                依赖与脚本
 AGENTS.md                   本仓库的协作约定

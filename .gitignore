@@ -5,9 +5,6 @@ node_modules/
 # 网页项目：从 node_modules 同步过来的图表库
 web/vendor/
 
-# Electron 打包产物
-desktop/dist-electron/
-
 # Neutralino：同步生成的资源目录、下载的二进制、打包产物
 desktop/resources/
 desktop/bin/
