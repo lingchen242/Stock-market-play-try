@@ -17,7 +17,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const html = readFileSync(join(here, '..', '股市模拟.html'), 'utf8');
+const html = readFileSync(join(here, '..', 'web', '股市模拟.html'), 'utf8');
 
 /** jsdom 不带 canvas 实现，这里给一个只吞调用的 2D 上下文桩。 */
 function fakeContext2D() {

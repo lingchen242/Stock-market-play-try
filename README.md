@@ -38,12 +38,12 @@
 
 ### 一、直接打开
 
-双击 `股市模拟.html`。
+双击 `web\股市模拟.html`。
 
 ### 二、本地服务
 
 ```bash
-npm install        # 装本地图表库与测试依赖，可选
+npm install        # 装图表库与测试依赖，可选；同时会把它同步到 web/vendor/
 npm run serve      # 打开 http://127.0.0.1:8080/
 ```
 
@@ -76,7 +76,7 @@ npm run serve      # 打开 http://127.0.0.1:8080/
 
 ```bash
 npx neu update              # 一次性下载 Neutralino 运行时，约 8 MB
-npm run neutralino:build    # 产出 dist/StockSim/StockSim-win_x64.exe
+npm run neutralino:build    # 产出 desktop/dist/StockSim/StockSim-win_x64.exe
 ```
 
 产物是**单个自包含 exe，2.62 MB**，双击即玩，目标机器不需要装任何东西。它借用系统自带的 WebView2 渲染，所以不像 Electron 那样要背一个上百 MB 的浏览器内核。
@@ -116,23 +116,35 @@ npm test
 ## 项目结构
 
 ```
-股市模拟.html            交付物：单文件游戏（内联 CSS 与 JS，约 100 KB）
-server.mjs               零依赖静态预览服务器（node:http）
-package.json             依赖与脚本
-AGENTS.md                本仓库的协作约定
+web/                        网页项目
+  股市模拟.html              交付物：单文件游戏（内联 CSS 与 JS，约 100 KB）
+  server.mjs                零依赖静态预览服务器（node:http）
+  prepare-vendor.mjs        把图表库同步到 vendor/
+  vendor/                   （生成物）本地图表库
+desktop/                    桌面打包
+  electron/                 Electron 主进程与构建脚本
+  electron-builder.yml      Electron 打包配置
+  neutralino/               Neutralino 资源同步与产物清理
+  neutralino.config.json    Neutralino 配置
 docs/
-  股市模拟-设计文档.md     市场模拟的完整设计
-  screenshots/           成品截图
+  股市模拟-设计文档.md        市场模拟的完整设计
+  打包桌面版说明.md           把游戏做成 exe 的两条路子
+  screenshots/              成品截图
 tests/
-  core.test.mjs          内核用例（22）
-  ui.test.mjs            界面静态一致性（6）
-  smoke.test.mjs         jsdom 真实 DOM 冒烟（3）
+  core.test.mjs             内核用例（22）
+  ui.test.mjs               界面静态一致性（6）
+  smoke.test.mjs            jsdom 真实 DOM 冒烟（3）
+  docs.test.mjs             文档链接一致性（4）
+  electron.test.mjs         Electron 配置一致性（8）
+  neutralino.test.mjs       Neutralino 配置一致性 + 端到端（9）
+package.json                依赖与脚本
+AGENTS.md                   本仓库的协作约定
 ```
 
 ## 技术栈
 
 - 原生 HTML / CSS / JavaScript。**无构建、无框架、无转译**，源码即交付物。
-- 图表：[Lightweight Charts](https://github.com/tradingview/lightweight-charts) 4.2.3，经 `node_modules` 或 CDN 引入。
+- 图表：[Lightweight Charts](https://github.com/tradingview/lightweight-charts) 4.2.3，经 `web/vendor/` 或 CDN 引入。
 - 存档：localStorage，键名 `stock-sim:save:v1`，带版本号。
 - 测试：Node 内置的 `node:test` 与 `node:vm`；DOM 冒烟用 jsdom（只是开发依赖）。
 - 预览服务：`node:http` 手写的静态服务器，同样零依赖。

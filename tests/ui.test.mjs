@@ -17,7 +17,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const html = readFileSync(join(here, '..', '股市模拟.html'), 'utf8');
+const html = readFileSync(join(here, '..', 'web', '股市模拟.html'), 'utf8');
 
 const coreMatch = html.match(/<script id="game-core">([\s\S]*?)<\/script>/);
 const uiMatch = html.match(/<script id="game-ui">([\s\S]*?)<\/script>/);
@@ -56,9 +56,9 @@ test('交付形态：单文件、无本地图片、图表库有三级加载链',
   assert.ok(!/<img\s/i.test(html), '不应依赖本地图片，图标请用 Emoji 或 CSS');
   assert.ok(!/url\(\s*['"]?(?!data:)[^)]*\.(png|jpg|jpeg|gif|webp|svg)/i.test(html), 'CSS 中不应引用图片文件');
 
-  // 本地 node_modules 优先，公网 CDN 兜底，最后是内置 Canvas 绘制
-  assert.match(html, /node_modules\/lightweight-charts\/dist\/lightweight-charts\.standalone\.production\.js/,
-    '应优先加载本地 node_modules 中的图表库');
+  // 本地 vendor 优先，公网 CDN 兜底，最后是内置 Canvas 绘制
+  assert.match(html, /'vendor\/lightweight-charts\.js'/,
+    '应优先加载同目录 vendor 下的图表库（由 npm run web:prepare 同步）');
   assert.match(html, /cdn\.jsdelivr\.net\/npm\/lightweight-charts@4\.2\.3/, '应有 jsDelivr 兜底源');
   assert.match(html, /unpkg\.com\/lightweight-charts@4\.2\.3/, '应有 unpkg 兜底源');
   assert.match(html, /drawCandles/, '离线时必须能退回内置 Canvas 绘图');

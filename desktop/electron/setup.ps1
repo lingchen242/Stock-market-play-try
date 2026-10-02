@@ -3,7 +3,7 @@
 # 这一步会联网下载约 250 MB，且默认下载源在 GitHub —— 本机 github.com 不通，
 # 所以脚本里强制把下载源指向国内镜像。不设置镜像的话，安装会在下载预编译二进制时失败。
 #
-# 用法：npm run electron:setup     （或直接 powershell -ExecutionPolicy Bypass -File electron/setup.ps1）
+# 用法：npm run electron:setup（在仓库根目录执行）
 
 $ErrorActionPreference = 'Stop'
 

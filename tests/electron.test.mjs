@@ -20,8 +20,8 @@ const here = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(here, '..');
 const read = (p) => readFileSync(join(ROOT, p), 'utf8');
 
-const mainSrc = read('electron/main.cjs');
-const builderYml = read('electron-builder.yml');
+const mainSrc = read('desktop/electron/main.cjs');
+const builderYml = read('desktop/electron-builder.yml');
 const pkg = JSON.parse(read('package.json'));
 
 test('主进程：语法可解析，并且关闭了 Node 集成', () => {
@@ -33,17 +33,17 @@ test('主进程：语法可解析，并且关闭了 Node 集成', () => {
 
 test('主进程：加载的就是交付物 HTML，且文件真实存在', () => {
   assert.match(mainSrc, /'股市模拟\.html'/, '主进程应加载 股市模拟.html');
-  assert.ok(existsSync(join(ROOT, '股市模拟.html')), '游戏文件不存在');
+  assert.ok(existsSync(join(ROOT, 'web', '股市模拟.html')), '游戏文件不存在');
 });
 
 test('打包配置：游戏本体与图表库都必须进包', () => {
-  assert.match(builderYml, /股市模拟\.html/, 'files 里缺少游戏本体');
+  assert.match(builderYml, /web\/股市模拟\.html/, 'files 里缺少游戏本体');
   assert.match(
     builderYml,
-    /node_modules\/lightweight-charts\/dist\/lightweight-charts\.standalone\.production\.js/,
+    /web\/vendor\/lightweight-charts\.js/,
     'files 里缺少图表库，桌面版离线时会失去 K 线图',
   );
-  assert.match(builderYml, /dist-electron/, '输出目录应为 dist-electron');
+  assert.match(builderYml, /desktop\/dist-electron/, '输出目录应为 desktop/dist-electron');
   assert.match(builderYml, /portable/, '应产出免安装便携版');
   assert.match(builderYml, /nsis/, '应产出安装版');
 });
@@ -56,18 +56,18 @@ test('打包配置：不把开发文件带进安装包', () => {
 });
 
 test('package.json：Electron 入口与三个脚本齐备，且脚本指向真实文件', () => {
-  assert.equal(pkg.main, 'electron/main.cjs', 'main 必须指向主进程');
+  assert.equal(pkg.main, 'desktop/electron/main.cjs', 'main 必须指向主进程');
   for (const name of ['electron:setup', 'electron:dev', 'electron:build']) {
     assert.ok(pkg.scripts[name], `缺少脚本 ${name}`);
   }
-  assert.ok(existsSync(join(ROOT, 'electron/setup.ps1')), 'electron/setup.ps1 不存在');
-  assert.ok(existsSync(join(ROOT, 'electron/build.ps1')), 'electron/build.ps1 不存在');
+  assert.ok(existsSync(join(ROOT, 'desktop/electron/setup.ps1')), 'desktop/electron/setup.ps1 不存在');
+  assert.ok(existsSync(join(ROOT, 'desktop/electron/build.ps1')), 'desktop/electron/build.ps1 不存在');
 });
 
 test('打包脚本：必须写死国内镜像，否则本机下不动 Electron 二进制', () => {
   const mirror = /ELECTRON_MIRROR\s*=\s*'https:\/\/registry\.npmmirror\.com\/-\/binary\/electron\/'/;
   const builderMirror = /ELECTRON_BUILDER_BINARIES_MIRROR\s*=\s*'https:\/\/registry\.npmmirror\.com\/-\/binary\/electron-builder-binaries\/'/;
-  for (const file of ['electron/setup.ps1', 'electron/build.ps1']) {
+  for (const file of ['desktop/electron/setup.ps1', 'desktop/electron/build.ps1']) {
     const src = read(file);
     assert.match(src, mirror, `${file} 缺少 ELECTRON_MIRROR`);
     assert.match(src, builderMirror, `${file} 缺少 ELECTRON_BUILDER_BINARIES_MIRROR`);

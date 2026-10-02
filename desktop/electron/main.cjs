@@ -8,8 +8,8 @@
 const { app, BrowserWindow, Menu, shell } = require('electron');
 const path = require('node:path');
 
-/** 游戏文件就在上一级目录，打包进 asar 后相对路径依然成立。 */
-const GAME_HTML = path.join(__dirname, '..', '股市模拟.html');
+/** 游戏在 web/ 目录下，打包进 asar 后相对路径依然成立。 */
+const GAME_HTML = path.join(__dirname, '..', '..', 'web', '股市模拟.html');
 
 function createWindow() {
   const win = new BrowserWindow({

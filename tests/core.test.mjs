@@ -15,7 +15,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const HTML_PATH = join(here, '..', '股市模拟.html');
+const HTML_PATH = join(here, '..', 'web', '股市模拟.html');
 const html = readFileSync(HTML_PATH, 'utf8');
 
 const scriptMatch = html.match(/<script id="game-core">([\s\S]*?)<\/script>/);

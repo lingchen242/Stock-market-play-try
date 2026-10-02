@@ -9,12 +9,13 @@ import { readdirSync, rmSync, statSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-const DIST = join(ROOT, 'dist');
+const DESKTOP = join(dirname(fileURLToPath(import.meta.url)), '..');
+const REPO = join(DESKTOP, '..');
+const DIST = join(DESKTOP, 'dist');
 const KEEP = /win_x64\.exe$/i;
 
 if (!existsSync(DIST)) {
-  console.error('× dist/ 不存在，请先运行 npm run neutralino:build');
+  console.error('× desktop/dist 不存在，请先运行 npm run neutralino:build');
   process.exit(1);
 }
 
@@ -44,5 +45,6 @@ if (kept.length === 0) {
 
 console.log(`已清理 ${removed} 个非 Windows 产物。最终交付物：`);
 for (const file of kept) {
-  console.log(`  ${file.path.replace(ROOT + '\\', '')}  ${(file.size / 1024 / 1024).toFixed(2)} MB`);
+  // 路径按仓库根来显示，避免看到 dist\... 时不知道是哪个 dist
+  console.log(`  ${file.path.replace(REPO + '\\', '')}  ${(file.size / 1024 / 1024).toFixed(2)} MB`);
 }

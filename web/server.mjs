@@ -3,15 +3,18 @@
  *
  * 存在的意义有两个：
  *  1. 让页面能以 http:// 协议打开（比 file:// 更接近真实浏览器环境，便于调试）；
- *  2. 让页面直接读取项目内 node_modules 里的图表库，而不必依赖公网 CDN。
+ *  2. 让页面直接读取 web/vendor/ 里的本地图表库，而不必依赖公网 CDN。
  *
- * 用法：node server.mjs   （可用 PORT 环境变量改端口）
+ * 服务根目录固定为这个文件所在的 web/，所以在仓库任意位置执行都能正常工作。
+ *
+ * 用法：npm run serve   （可用 PORT 环境变量改端口）
  */
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { extname, join, normalize, resolve, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const ROOT = resolve(process.cwd());
+const ROOT = resolve(join(fileURLToPath(import.meta.url), '..'));
 const PORT = Number(process.env.PORT ?? 8080);
 const ENTRY = '股市模拟.html';
 

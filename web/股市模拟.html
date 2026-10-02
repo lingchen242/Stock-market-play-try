@@ -1544,7 +1544,10 @@ window.GameCore = (function () {
 
   /* ---------------------------------------------------------- 图表库三级加载 */
   const CHART_SOURCES = [
-    'node_modules/lightweight-charts/dist/lightweight-charts.standalone.production.js',
+    // 本地优先：由 npm run web:prepare 从 node_modules 同步到 web/vendor/。
+    // 用 vendor/ 而不是 node_modules/，是因为这个 HTML 是要能单独拷走的交付物，
+    // 不该知道 npm 的目录结构。
+    'vendor/lightweight-charts.js',
     'https://cdn.jsdelivr.net/npm/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js',
     'https://unpkg.com/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js',
   ];

@@ -1,10 +1,11 @@
 /**
  * Neutralino 打包配置的一致性测试。
  *
- * 这套配置里有两处"改一处忘另一处就会静默失效"的地方，正是这里要守住的：
- *   1. 端口。若设成 0（随机端口），WebView2 的 origin 每次都变，
+ * 这套配置里有三处"改一处忘另一处就会静默失效"的地方，正是这里要守住的：
+ *   1. documentRoot。写成包根的话所有资源都 404，窗口里只显示找不到 127.0.0.1。
+ *   2. 端口。若设成 0（随机端口），WebView2 的 origin 每次都变，
  *      游戏的 localStorage 存档就会每次启动都丢失 —— 必须固定端口。
- *   2. 图表库的相对路径。游戏里加载链的第一级是相对路径，
+ *   3. 图表库的相对路径。游戏里加载链的第一级是相对路径，
  *      资源同步脚本必须把它放在同一个相对位置，否则桌面版离线时会丢掉 K 线图。
  *
  * 运行：node --test
@@ -20,9 +21,9 @@ const here = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(here, '..');
 const read = (p) => readFileSync(join(ROOT, p), 'utf8');
 
-const config = JSON.parse(read('neutralino.config.json'));
-const prepare = read('neutralino/prepare-resources.mjs');
-const html = read('股市模拟.html');
+const config = JSON.parse(read('desktop/neutralino.config.json'));
+const prepare = read('desktop/neutralino/prepare-resources.mjs');
+const html = read('web/股市模拟.html');
 
 test('配置：必填字段齐备，且 documentRoot 指向包内的 resources/', () => {
   // applicationId / url / defaultMode 是 schema 里的必填项
@@ -57,11 +58,17 @@ test('配置：不开启 native API（游戏是纯网页，不需要）', () => 
 });
 
 test('资源同步：图表库必须落在游戏期望的相对路径上', () => {
-  // 取出游戏里加载链的第一条源，它决定了资源必须放哪
-  const source = html.match(/const CHART_SOURCES = \[\s*'([^']+)'/);
-  assert.ok(source, '未能从 HTML 中解析出 CHART_SOURCES');
+  // 取出游戏里加载链的第一条本地源，它决定了资源必须放哪
+  const block = html.match(/const CHART_SOURCES = \[([\s\S]*?)\];/);
+  assert.ok(block, '未能从 HTML 中解析出 CHART_SOURCES');
 
-  for (const segment of source[1].split('/')) {
+  const local = [...block[1].matchAll(/'([^']+)'/g)]
+    .map((m) => m[1])
+    .find((s) => !/^https?:/.test(s));
+  assert.ok(local, 'CHART_SOURCES 里找不到本地图表库路径');
+  assert.ok(!/node_modules/.test(local), '本地源不应再依赖 npm 的 node_modules 目录结构');
+
+  for (const segment of local.split('/')) {
     assert.ok(
       prepare.includes(`'${segment}'`),
       `资源同步脚本缺少路径段 ${segment}，桌面版离线时将退回内置简易图`,
@@ -71,7 +78,7 @@ test('资源同步：图表库必须落在游戏期望的相对路径上', () =>
 
 test('资源同步：入口改名为 ASCII 的 index.html，避免非 ASCII 路径风险', () => {
   assert.match(prepare, /copyFileSync\(GAME_SOURCE, join\(RESOURCES, 'index\.html'\)\)/);
-  assert.ok(existsSync(join(ROOT, '股市模拟.html')), '游戏本体不存在');
+  assert.ok(existsSync(join(ROOT, 'web', '股市模拟.html')), '游戏本体不存在');
 });
 
 test('package.json：Neutralino 三个脚本齐备', () => {
@@ -83,8 +90,8 @@ test('package.json：Neutralino 三个脚本齐备', () => {
   assert.match(pkg.scripts['neutralino:build'], /--embed-resources/, '应把资源嵌进二进制，产出单文件 exe');
 });
 
-test('打包产物：dist/ 里只保留 Windows 版 exe（若已构建）', () => {
-  const dist = join(ROOT, 'dist');
+test('打包产物：desktop/dist 里只保留 Windows 版 exe（若已构建）', () => {
+  const dist = join(ROOT, 'desktop', 'dist');
   if (!existsSync(dist)) {
     // 还没构建过，跳过；这不是配置错误
     return;
@@ -114,7 +121,7 @@ test('打包产物：dist/ 里只保留 Windows 版 exe（若已构建）', () =
  * 注意：运行时会短暂弹出一个应用窗口，几秒后自动关闭。
  */
 test('端到端：打包后的 exe 必须真的能通过 HTTP 提供游戏页面', async () => {
-  const exe = join(ROOT, 'dist', 'StockSim', 'StockSim-win_x64.exe');
+  const exe = join(ROOT, 'desktop', 'dist', 'StockSim', 'StockSim-win_x64.exe');
   if (process.platform !== 'win32' || !existsSync(exe)) return;
 
   // 先确认端口上没有残留实例。否则这条用例可能对着旧进程"假通过"，
