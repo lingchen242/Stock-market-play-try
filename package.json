@@ -4,10 +4,14 @@
   "private": true,
   "type": "module",
   "description": "《股市模拟》—— 45 个交易日的 A 股投资模拟小游戏（单文件 HTML 交付，node_modules 管理图表库）",
+  "main": "electron/main.cjs",
   "scripts": {
     "test": "node --test",
     "serve": "node server.mjs",
-    "start": "node server.mjs"
+    "start": "node server.mjs",
+    "electron:setup": "powershell -NoProfile -ExecutionPolicy Bypass -File electron/setup.ps1",
+    "electron:dev": "electron .",
+    "electron:build": "powershell -NoProfile -ExecutionPolicy Bypass -File electron/build.ps1"
   },
   "dependencies": {
     "lightweight-charts": "4.2.3"

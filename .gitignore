@@ -1,3 +1,6 @@
 # 第三方依赖与已安装技能：机器本地资产，不入版本控制
 node_modules/
 .dsh/skills/
+
+# Electron 打包产物
+dist-electron/
